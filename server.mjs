@@ -179,7 +179,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|assign|delete)$/);
+  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|assign|reassign|delete)$/);
   if (!taskRoute) {
     sendJson(res, 404, { error: 'not_found' });
     return;
@@ -239,6 +239,48 @@ async function handleApi(req, res, url) {
     }
     await launchTaskRun(task, agent);
     sendJson(res, 202, { ok: true, taskId: task.id, agentId: agent.id });
+    return;
+  }
+
+  if (action === 'reassign') {
+    const body = await readJsonBody(req);
+    const requestedAgentId = String(body.agentId || '').trim();
+    const agent = agentCatalog.find((item) => item.id === requestedAgentId) || null;
+
+    if (!agent) {
+      sendJson(res, 400, { error: 'validation', message: 'A valid agentId is required to reassign a task.' });
+      return;
+    }
+
+    if (activeRuns.has(task.id) || task.runStatus === 'running') {
+      sendJson(res, 400, { error: 'invalid_state', message: 'Running tasks cannot be reassigned yet. Stop or let the run finish first.' });
+      return;
+    }
+
+    if (task.lane === 'done') {
+      sendJson(res, 400, { error: 'invalid_state', message: 'Completed tasks cannot be reassigned.' });
+      return;
+    }
+
+    const previousAgent = agentCatalog.find(
+      (item) => item.id === (task.assignedAgentId || task.preferredAgentId || '')
+    ) || null;
+
+    task.preferredAgentId = agent.id;
+    task.updatedAt = Date.now();
+
+    if (['ready', 'inprogress', 'review'].includes(task.lane)) {
+      task.lane = 'ready';
+      task.assignedAgentId = null;
+      task.runStatus = 'idle';
+    }
+
+    pushActivity(
+      `${task.title} reassigned${previousAgent ? ` from ${previousAgent.name}` : ''} to ${agent.name}.`,
+      'warning'
+    );
+    await persistState();
+    sendJson(res, 200, { ok: true, task });
     return;
   }
 
@@ -356,6 +398,7 @@ async function launchTaskRun(task, agent) {
     const usage = parsed?.meta?.agentMeta?.usage || parsed?.meta?.agentMeta?.lastCallUsage || null;
     const output = (parsed?.payloads || []).map((item) => item.text).filter(Boolean).join('\n\n').trim();
     const hasPayload = Array.isArray(parsed?.payloads) && parsed.payloads.some((item) => item.text || item.mediaUrl);
+    const runNote = sanitizeRunNote(run.stderr);
 
     task.updatedAt = finishedAt;
 
@@ -370,7 +413,7 @@ async function launchTaskRun(task, agent) {
         usage,
         sessionId: parsed?.meta?.agentMeta?.sessionId || null,
         model: parsed?.meta?.agentMeta?.model || null,
-        error: run.stderr.trim() || null,
+        error: runNote,
       };
       pushActivity(`${agent.name} finished ${task.title}. Review is ready.`, 'info');
     } else {
@@ -717,6 +760,32 @@ function extractJsonFromMixedText(raw) {
   }
 
   return tryParseJson(raw.slice(firstBrace, lastBrace + 1));
+}
+
+function sanitizeRunNote(raw) {
+  if (!raw) {
+    return null;
+  }
+
+  const withoutJson = raw.replace(/\{[\s\S]*$/, '').trim();
+  const filtered = withoutJson
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter(
+      (line) =>
+        !line.startsWith('gateway connect failed: GatewayClientRequestError: pairing required') &&
+        !line.startsWith('Gateway agent failed; falling back to embedded: Error: gateway closed (1008): pairing required') &&
+        !line.startsWith('Gateway target:') &&
+        !line.startsWith('Source:') &&
+        !line.startsWith('Config:') &&
+        !line.startsWith('Bind:') &&
+        !line.startsWith('[agents/auth-profiles] inherited auth-profiles from main agent')
+    )
+    .join('\n')
+    .trim();
+
+  return filtered || null;
 }
 
 async function execOpenClawJson(args) {

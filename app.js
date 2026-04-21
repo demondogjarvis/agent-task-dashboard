@@ -8,6 +8,9 @@ const skillLabels = {
   product: 'Product',
 };
 
+const DONE_HISTORY_WINDOW_MS = 8 * 60 * 60 * 1000;
+const DONE_HISTORY_MINIMUM = 4;
+
 const viewMeta = {
   overview: {
     title: 'Overview',
@@ -25,11 +28,16 @@ const viewMeta = {
     title: 'Runtime',
     description: 'Inspect OpenClaw session telemetry, tracked background state, and orchestration events.',
   },
+  history: {
+    title: 'History',
+    description: 'Browse every completed task while the Done column stays focused on recent completions.',
+  },
 };
 
 let dashboard = null;
 let pollHandle = null;
 let isMutating = false;
+let pendingReassignTaskId = null;
 
 const statsGrid = document.getElementById('stats-grid');
 const approvalList = document.getElementById('approval-list');
@@ -47,11 +55,14 @@ const usageList = document.getElementById('usage-list');
 const activityList = document.getElementById('activity-list');
 const sessionList = document.getElementById('session-list');
 const backgroundTaskList = document.getElementById('background-task-list');
+const historyList = document.getElementById('history-list');
+const historySummary = document.getElementById('history-summary');
 const taskForm = document.getElementById('task-form');
 const tokenTotalPill = document.getElementById('token-total-pill');
 const runningAgentsPill = document.getElementById('running-agents-pill');
 const sessionCountPill = document.getElementById('session-count-pill');
 const backgroundTaskPill = document.getElementById('background-task-pill');
+const historyCountPill = document.getElementById('history-count-pill');
 const agentCountPill = document.getElementById('agent-count-pill');
 const resetButton = document.getElementById('reset-button');
 const seedReadyButton = document.getElementById('seed-ready-button');
@@ -59,6 +70,11 @@ const newTaskButton = document.getElementById('new-task-button');
 const refreshButton = document.getElementById('refresh-button');
 const pageTitle = document.getElementById('page-title');
 const pageDescription = document.getElementById('page-description');
+const reassignDialog = document.getElementById('reassign-dialog');
+const reassignTaskTitle = document.getElementById('reassign-task-title');
+const reassignAgentSelect = document.getElementById('reassign-agent-select');
+const reassignConfirmButton = document.getElementById('reassign-confirm-button');
+const reassignCancelButton = document.getElementById('reassign-cancel-button');
 const cardTemplate = document.getElementById('task-card-template');
 
 async function api(path, options = {}) {
@@ -130,6 +146,20 @@ function populateFormOptions() {
   }
 }
 
+function populateAgentSelectOptions(selectElement, selectedValue = '') {
+  selectElement.innerHTML = dashboard.agents
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(
+      (agent) => `<option value="${agent.id}">${agent.name} (${skillLabels[agent.specialty] || agent.specialty})</option>`
+    )
+    .join('');
+
+  if (selectedValue && dashboard.agents.some((agent) => agent.id === selectedValue)) {
+    selectElement.value = selectedValue;
+  }
+}
+
 function findAgent(agentId) {
   return dashboard?.agents.find((agent) => agent.id === agentId) || null;
 }
@@ -151,6 +181,67 @@ function priorityClass(priority) {
 function truncate(text, max = 170) {
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max).trim()}…` : text;
+}
+
+function cleanRuntimeNote(text) {
+  if (!text) return '';
+
+  const withoutJson = text.replace(/\{[\s\S]*$/, '').trim();
+  const filtered = withoutJson
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter(
+      (line) =>
+        !line.startsWith('gateway connect failed: GatewayClientRequestError: pairing required') &&
+        !line.startsWith('Gateway agent failed; falling back to embedded: Error: gateway closed (1008): pairing required') &&
+        !line.startsWith('Gateway target:') &&
+        !line.startsWith('Source:') &&
+        !line.startsWith('Config:') &&
+        !line.startsWith('Bind:') &&
+        !line.startsWith('[agents/auth-profiles] inherited auth-profiles from main agent')
+    )
+    .join('\n')
+    .trim();
+
+  return filtered;
+}
+
+function getTaskCompletionTime(task) {
+  return task.completedAt || task.updatedAt || task.lastRun?.finishedAt || task.createdAt || 0;
+}
+
+function getDoneTasks() {
+  return dashboard.tasks
+    .filter((task) => task.lane === 'done')
+    .sort((a, b) => getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority]);
+}
+
+function getVisibleDoneTasks(doneTasks = getDoneTasks()) {
+  const cutoff = Date.now() - DONE_HISTORY_WINDOW_MS;
+  const recentDoneTasks = doneTasks.filter((task) => getTaskCompletionTime(task) >= cutoff);
+  return recentDoneTasks.length >= DONE_HISTORY_MINIMUM
+    ? recentDoneTasks
+    : doneTasks.slice(0, Math.min(DONE_HISTORY_MINIMUM, doneTasks.length));
+}
+
+function getDoneColumnMessage(doneTasks, visibleDoneTasks) {
+  const cutoff = Date.now() - DONE_HISTORY_WINDOW_MS;
+  const recentDoneCount = doneTasks.filter((task) => getTaskCompletionTime(task) >= cutoff).length;
+
+  if (!doneTasks.length) {
+    return 'Completed tasks will land here, with full history available once the board has some wins.';
+  }
+
+  if (recentDoneCount >= DONE_HISTORY_MINIMUM) {
+    return 'Showing every task completed in the last 8 hours.';
+  }
+
+  if (doneTasks.length <= DONE_HISTORY_MINIMUM) {
+    return 'Showing every completed task currently on the board.';
+  }
+
+  return `Showing the latest ${visibleDoneTasks.length} completed tasks.`;
 }
 
 function renderStats() {
@@ -198,6 +289,7 @@ function renderStats() {
   tokenTotalPill.textContent = `${metrics.totalSessionTokens.toLocaleString()} tokens`;
   sessionCountPill.textContent = `${openclaw.sessions.length} sessions`;
   backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length} tracked`;
+  historyCountPill.textContent = `${metrics.doneCount} completed`;
   agentCountPill.textContent = `${dashboard.agents.length} agents`;
 }
 
@@ -218,6 +310,10 @@ function buildTaskActions(task) {
     actions.push(`<button class="button primary" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
   } else if (!isRunning && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
     actions.push(`<button class="button ghost" data-action="move-right" data-task-id="${task.id}">Advance</button>`);
+  }
+
+  if (!isRunning && task.lane !== 'done') {
+    actions.push(`<button class="button ghost" data-action="reassign" data-task-id="${task.id}">Reassign</button>`);
   }
 
   if (!isRunning) {
@@ -305,11 +401,22 @@ function renderApprovals() {
 
 function renderKanban() {
   kanbanBoard.innerHTML = '';
+  const doneTasks = getDoneTasks();
+  const visibleDoneTasks = getVisibleDoneTasks(doneTasks);
 
   dashboard.lanes.forEach((lane) => {
-    const tasks = dashboard.tasks
-      .filter((task) => task.lane === lane.id)
-      .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0));
+    const tasks = (lane.id === 'done' ? visibleDoneTasks : dashboard.tasks.filter((task) => task.lane === lane.id))
+      .sort((a, b) => {
+        if (lane.id === 'done') {
+          return getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority];
+        }
+        return priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0);
+      });
+
+    const countLabel =
+      lane.id === 'done'
+        ? `${tasks.length} shown${doneTasks.length > tasks.length ? ` of ${doneTasks.length}` : ''}`
+        : `${tasks.length} task${tasks.length === 1 ? '' : 's'}`;
 
     const column = document.createElement('section');
     column.className = 'kanban-column';
@@ -317,7 +424,7 @@ function renderKanban() {
       <div class="column-header">
         <div>
           <h3>${lane.title}</h3>
-          <span class="column-count">${tasks.length} task${tasks.length === 1 ? '' : 's'}</span>
+          <span class="column-count">${countLabel}</span>
         </div>
       </div>
       <div class="task-stack"></div>
@@ -325,7 +432,7 @@ function renderKanban() {
 
     const stack = column.querySelector('.task-stack');
     if (!tasks.length) {
-      stack.innerHTML = '<div class="empty-state">No tasks in this lane.</div>';
+      stack.innerHTML = `<div class="empty-state">${lane.id === 'done' ? 'No completed tasks yet.' : 'No tasks in this lane.'}</div>`;
     }
 
     tasks.forEach((task) => {
@@ -334,7 +441,7 @@ function renderKanban() {
       const runStatus = task.lastRun?.status || task.runStatus;
       const usage = task.lastRun?.usage?.total ? `${task.lastRun.usage.total.toLocaleString()} tokens` : null;
       const outputPreview = task.lastRun?.output ? truncate(task.lastRun.output, 220) : '';
-      const errorPreview = task.lastRun?.error ? truncate(task.lastRun.error, 180) : '';
+      const errorPreview = task.lastRun?.error ? truncate(cleanRuntimeNote(task.lastRun.error), 180) : '';
 
       node.querySelector('.priority-dot').classList.add(priorityClass(task.priority));
       node.querySelector('.task-priority-label').textContent = task.priority;
@@ -355,6 +462,13 @@ function renderKanban() {
           preferredTag.textContent = `Preferred: ${preferredAgent.name}`;
           node.querySelector('.task-meta').appendChild(preferredTag);
         }
+      }
+
+      if (lane.id === 'done') {
+        const completedTag = document.createElement('span');
+        completedTag.className = 'tag';
+        completedTag.textContent = `Completed ${relativeTime(getTaskCompletionTime(task))}`;
+        node.querySelector('.task-meta').appendChild(completedTag);
       }
 
       if (runStatus && runStatus !== 'idle') {
@@ -394,6 +508,16 @@ function renderKanban() {
 
       stack.appendChild(node);
     });
+
+    if (lane.id === 'done') {
+      const footer = document.createElement('div');
+      footer.className = 'column-footer';
+      footer.innerHTML = `
+        <p class="column-footnote">${getDoneColumnMessage(doneTasks, visibleDoneTasks)}</p>
+        <a class="column-link" href="#history">See history</a>
+      `;
+      column.appendChild(footer);
+    }
 
     kanbanBoard.appendChild(column);
   });
@@ -532,6 +656,42 @@ function renderBackgroundTasks() {
     : '<div class="empty-state">No background tasks or active agent processes right now.</div>';
 }
 
+function renderHistory() {
+  const doneTasks = getDoneTasks();
+
+  historySummary.textContent = doneTasks.length
+    ? `${doneTasks.length} completed task${doneTasks.length === 1 ? '' : 's'}, newest first.`
+    : 'Completed tasks will appear here once work starts closing out.';
+
+  historyList.innerHTML = doneTasks.length
+    ? doneTasks
+        .map((task) => {
+          const agent = findAgent(task.assignedAgentId);
+          const outputPreview = task.lastRun?.output ? truncate(task.lastRun.output, 260) : '';
+          return `
+            <article class="history-card">
+              <div class="history-card-header">
+                <div>
+                  <p class="eyebrow">Completed ${relativeTime(getTaskCompletionTime(task))}</p>
+                  <h3>${task.title}</h3>
+                </div>
+                <span class="pill success">Done</span>
+              </div>
+              <p>${task.notes || 'No notes captured.'}</p>
+              <div class="task-meta">
+                <span class="tag">${task.owner || 'No stream'}</span>
+                <span class="tag">${skillLabels[task.skill] || task.skill}</span>
+                <span class="tag">${task.priority}</span>
+                <span class="tag">${agent ? `${agent.emoji} ${agent.name}` : 'No agent recorded'}</span>
+              </div>
+              ${outputPreview ? `<p class="task-run-note">Latest run: ${outputPreview}</p>` : ''}
+            </article>
+          `;
+        })
+        .join('')
+    : '<div class="empty-state">No completed task history yet.</div>';
+}
+
 function renderAll() {
   renderStats();
   populateFormOptions();
@@ -543,7 +703,15 @@ function renderAll() {
   renderActivity();
   renderSessions();
   renderBackgroundTasks();
+  renderHistory();
   applyView();
+}
+
+function openReassignDialog(task) {
+  pendingReassignTaskId = task.id;
+  reassignTaskTitle.textContent = `Reassign “${task.title}”`;
+  populateAgentSelectOptions(reassignAgentSelect, task.preferredAgentId || task.assignedAgentId || '');
+  reassignDialog.showModal();
 }
 
 async function refreshDashboard() {
@@ -586,6 +754,11 @@ document.addEventListener('click', (event) => {
   }
   if (action === 'assign') {
     mutate(() => api(`/api/tasks/${taskId}/assign`, { method: 'POST', body: JSON.stringify({}) }));
+  }
+  if (action === 'reassign') {
+    const task = dashboard.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    openReassignDialog(task);
   }
   if (action === 'delete') {
     if (!window.confirm('Delete this task from the board?')) return;
@@ -636,6 +809,24 @@ resetButton.addEventListener('click', () => {
 
 refreshButton.addEventListener('click', () => {
   refreshDashboard().catch((error) => window.alert(error.message));
+});
+
+reassignCancelButton.addEventListener('click', () => {
+  pendingReassignTaskId = null;
+  reassignDialog.close();
+});
+
+reassignConfirmButton.addEventListener('click', () => {
+  if (!pendingReassignTaskId) {
+    reassignDialog.close();
+    return;
+  }
+
+  const agentId = reassignAgentSelect.value;
+  const taskId = pendingReassignTaskId;
+  pendingReassignTaskId = null;
+  reassignDialog.close();
+  mutate(() => api(`/api/tasks/${taskId}/reassign`, { method: 'POST', body: JSON.stringify({ agentId }) }));
 });
 
 newTaskButton.addEventListener('click', () => {

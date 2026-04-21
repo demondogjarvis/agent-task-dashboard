@@ -20,6 +20,7 @@
           <button class="nav-link" data-view-link="tasks">Tasks</button>
           <button class="nav-link" data-view-link="agents">Agents</button>
           <button class="nav-link" data-view-link="runtime">Runtime</button>
+          <button class="nav-link" data-view-link="history">History</button>
         </nav>
 
         <div class="sidebar-card">
@@ -226,8 +227,45 @@
             </article>
           </div>
         </section>
+
+        <section class="page-view" data-view="history">
+          <div class="history-layout">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Completed work</p>
+                  <h3>Done task history</h3>
+                </div>
+                <span class="pill success" id="history-count-pill">0 completed</span>
+              </div>
+              <p id="history-summary" class="subtitle"></p>
+              <div id="history-list" class="history-list"></div>
+            </article>
+          </div>
+        </section>
       </main>
     </div>
+
+    <dialog id="reassign-dialog" class="modal-dialog">
+      <form method="dialog" class="modal-card">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Reassign task</p>
+            <h3 id="reassign-task-title">Select a new agent</h3>
+          </div>
+        </div>
+
+        <label class="modal-label">
+          Agent
+          <select id="reassign-agent-select"></select>
+        </label>
+
+        <div class="topbar-actions">
+          <button type="button" id="reassign-cancel-button" class="button ghost">Cancel</button>
+          <button type="button" id="reassign-confirm-button" class="button primary">Reassign</button>
+        </div>
+      </form>
+    </dialog>
 
     <template id="task-card-template">
       <article class="task-card">
