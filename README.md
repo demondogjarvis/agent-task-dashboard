@@ -1,33 +1,30 @@
 # Agent Task Dashboard
 
-A local-first browser prototype for managing agent work with staged approvals.
+A local browser app for managing staged agent work with real OpenClaw-backed runs.
 
-## What it includes
+## What it does now
 
-- Kanban lanes from intake through done
-- Approval gate before agents can claim work
-- Live agent cards with status and current task
-- Token usage panel per agent
-- Activity log for orchestration events
-- Auto-claim simulation for approved tasks
-- Local persistence via browser localStorage
+- Persists board state in `data/state.json`
+- Enforces definition and approval before assignment
+- Seeds and manages isolated OpenClaw agents for frontend, backend, QA, ops, automation, and product work
+- Launches real `openclaw agent --agent <id>` runs when a ready task is assigned
+- Tracks active process runs in the dashboard
+- Surfaces live OpenClaw session telemetry and token usage
+- Moves completed agent runs into review for human signoff
 
-## Open it
-
-Option 1, simple:
-- Open `index.html` directly in your browser
-
-Option 2, recommended:
-- Serve the folder locally and open `http://127.0.0.1:4311`
-
-Example:
+## Run it
 
 ```bash
 cd agent-task-dashboard
-python3 -m http.server 4311
+node server.mjs
 ```
+
+Then open:
+
+- `http://127.0.0.1:4311`
 
 ## Notes
 
-This is a prototype control surface, not yet wired into live OpenClaw sessions or task assignment APIs.
-The next step would be connecting it to real task state, agent sessions, token telemetry, and approval actions.
+- This uses the local OpenClaw CLI and your configured model provider.
+- Assigning a task to an agent triggers a real model-backed run and will consume tokens.
+- The current implementation tracks launched runs through the local dashboard server process.

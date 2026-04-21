@@ -1,0 +1,91 @@
+{
+  "tasks": [
+    {
+      "id": "task-seed-101",
+      "title": "Stabilize client invoice ingestion",
+      "notes": "Audit retry policy, idempotency keys, and dead-letter handling for the overnight importer.",
+      "priority": "critical",
+      "skill": "backend",
+      "owner": "Northstar Finance",
+      "lane": "approval",
+      "assignedAgentId": null,
+      "runStatus": "idle",
+      "createdAt": 1776760358549,
+      "updatedAt": 1776760358549,
+      "lastRun": null
+    },
+    {
+      "id": "task-seed-102",
+      "title": "Refine migration runbook UI",
+      "notes": "Tighten the operator dashboard so migration checkpoints are obvious at a glance.",
+      "priority": "high",
+      "skill": "frontend",
+      "owner": "Atlas Rollout",
+      "lane": "ready",
+      "assignedAgentId": null,
+      "runStatus": "idle",
+      "createdAt": 1776762458549,
+      "updatedAt": 1776762458549,
+      "lastRun": null
+    },
+    {
+      "id": "task-seed-103",
+      "title": "Map automation opportunities in onboarding flow",
+      "notes": "Find repetitive human approvals that can become policy-driven checks later.",
+      "priority": "medium",
+      "skill": "automation",
+      "owner": "Launch Ops",
+      "lane": "definition",
+      "assignedAgentId": null,
+      "runStatus": "idle",
+      "createdAt": 1776764258549,
+      "updatedAt": 1776764258549,
+      "lastRun": null
+    },
+    {
+      "id": "task-seed-104",
+      "title": "Document token budget policy",
+      "notes": "Set thresholds per agent class so expensive runs trigger review before launch.",
+      "priority": "low",
+      "skill": "product",
+      "owner": "Internal",
+      "lane": "done",
+      "assignedAgentId": "north",
+      "runStatus": "succeeded",
+      "createdAt": 1776755258549,
+      "updatedAt": 1776763658549,
+      "lastRun": {
+        "status": "succeeded",
+        "startedAt": 1776762758549,
+        "finishedAt": 1776763658549,
+        "output": "Summary\nToken thresholds drafted for lightweight, normal, and deep task classes.\n\nWhat I did\nOutlined policy tiers and review triggers.\n\nRisks or blockers\nNeeds a final call on threshold numbers.\n\nRecommended next step\nValidate thresholds against one week of real usage.",
+        "usage": {
+          "input": 4120,
+          "output": 314,
+          "total": 4434
+        },
+        "error": null
+      }
+    }
+  ],
+  "activity": [
+    {
+      "id": "activity-th2tvz",
+      "message": "Board state reset to the live prototype seed.",
+      "tone": "info",
+      "time": 1776766058549
+    },
+    {
+      "id": "activity-seed-1",
+      "message": "Dashboard upgraded from a demo board to a live local app shell.",
+      "tone": "info",
+      "time": 1776765578549
+    },
+    {
+      "id": "activity-seed-2",
+      "message": "Approved tasks can now launch real isolated OpenClaw agent runs.",
+      "tone": "busy",
+      "time": 1776765818549
+    }
+  ]
+}

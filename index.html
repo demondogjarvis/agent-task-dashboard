@@ -18,8 +18,8 @@
         </div>
         <div class="topbar-actions">
           <button id="new-task-button" class="button primary">New task</button>
-          <button id="auto-claim-button" class="button ghost">Auto-claim: Off</button>
-          <button id="reset-button" class="button ghost danger">Reset demo</button>
+          <button id="refresh-button" class="button ghost">Refresh live data</button>
+          <button id="reset-button" class="button ghost danger">Reset board</button>
         </div>
       </header>
 
@@ -69,7 +69,7 @@
             </label>
             <div class="form-actions wide">
               <button type="submit" class="button primary">Create task</button>
-              <button type="button" id="seed-ready-button" class="button ghost">Create approved sample</button>
+              <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
             </div>
           </form>
         </article>
@@ -118,7 +118,7 @@
           <div class="panel-header">
             <div>
               <p class="eyebrow">Usage</p>
-              <h2>Today’s token burn</h2>
+              <h2>Live token footprint</h2>
             </div>
             <span class="pill neutral" id="token-total-pill">0 tokens</span>
           </div>
@@ -131,9 +131,33 @@
               <p class="eyebrow">Ops log</p>
               <h2>Recent orchestration events</h2>
             </div>
-            <span class="pill neutral">Live demo feed</span>
+            <span class="pill neutral">Live app events</span>
           </div>
           <div id="activity-list" class="activity-list"></div>
+        </article>
+      </section>
+
+      <section class="telemetry-grid">
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Sessions</p>
+              <h2>OpenClaw session telemetry</h2>
+            </div>
+            <span class="pill neutral" id="session-count-pill">0 sessions</span>
+          </div>
+          <div id="session-list" class="activity-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Background runtime</p>
+              <h2>Tracked tasks and process state</h2>
+            </div>
+            <span class="pill neutral" id="background-task-pill">0 tracked</span>
+          </div>
+          <div id="background-task-list" class="activity-list"></div>
         </article>
       </section>
     </div>

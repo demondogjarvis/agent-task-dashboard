@@ -1,480 +1,106 @@
-const STORAGE_KEY = "jarvis-agent-dashboard-v1";
-
-const lanes = [
-  { id: "intake", title: "Intake" },
-  { id: "definition", title: "Definition" },
-  { id: "approval", title: "Awaiting Approval" },
-  { id: "ready", title: "Ready for Agents" },
-  { id: "inprogress", title: "In Progress" },
-  { id: "review", title: "Review" },
-  { id: "done", title: "Done" },
-];
-
 const priorityRank = { critical: 4, high: 3, medium: 2, low: 1 };
-
 const skillLabels = {
-  frontend: "Frontend",
-  backend: "Backend",
-  ops: "Ops",
-  qa: "QA",
-  automation: "Automation",
-  product: "Product",
+  frontend: 'Frontend',
+  backend: 'Backend',
+  ops: 'Ops',
+  qa: 'QA',
+  automation: 'Automation',
+  product: 'Product',
 };
 
-const seedState = {
-  autoClaimEnabled: false,
-  tasks: [
-    {
-      id: "task-101",
-      title: "Stabilize client invoice ingestion",
-      notes: "Audit retry policy, idempotency keys, and dead-letter handling for the overnight importer.",
-      priority: "critical",
-      skill: "backend",
-      owner: "Northstar Finance",
-      lane: "approval",
-      assignedAgentId: null,
-      createdAt: Date.now() - 1000 * 60 * 90,
-    },
-    {
-      id: "task-102",
-      title: "Refine migration runbook UI",
-      notes: "Tighten the operator dashboard so migration checkpoints are obvious at a glance.",
-      priority: "high",
-      skill: "frontend",
-      owner: "Atlas Rollout",
-      lane: "ready",
-      assignedAgentId: null,
-      createdAt: Date.now() - 1000 * 60 * 50,
-    },
-    {
-      id: "task-103",
-      title: "Create regression checklist for approval workflows",
-      notes: "Convert edge cases from support incidents into a reusable QA gate before release.",
-      priority: "medium",
-      skill: "qa",
-      owner: "Core Platform",
-      lane: "inprogress",
-      assignedAgentId: "agent-qa-1",
-      createdAt: Date.now() - 1000 * 60 * 180,
-    },
-    {
-      id: "task-104",
-      title: "Map automation opportunities in onboarding flow",
-      notes: "Find repetitive human approvals that can become policy-driven checks later.",
-      priority: "medium",
-      skill: "automation",
-      owner: "Launch Ops",
-      lane: "definition",
-      assignedAgentId: null,
-      createdAt: Date.now() - 1000 * 60 * 30,
-    },
-    {
-      id: "task-105",
-      title: "Document token budget policy",
-      notes: "Set thresholds per agent class so expensive runs trigger review before launch.",
-      priority: "low",
-      skill: "product",
-      owner: "Internal",
-      lane: "done",
-      assignedAgentId: "agent-prod-1",
-      createdAt: Date.now() - 1000 * 60 * 400,
-    },
-  ],
-  agents: [
-    {
-      id: "agent-fe-1",
-      name: "Atlas",
-      specialty: "frontend",
-      status: "idle",
-      currentTaskId: null,
-      tokensToday: 18640,
-      maxTokens: 60000,
-      capability: "UI systems and dashboards",
-    },
-    {
-      id: "agent-be-1",
-      name: "Meridian",
-      specialty: "backend",
-      status: "idle",
-      currentTaskId: null,
-      tokensToday: 24110,
-      maxTokens: 70000,
-      capability: "Services, APIs, and data flows",
-    },
-    {
-      id: "agent-qa-1",
-      name: "Sentinel",
-      specialty: "qa",
-      status: "busy",
-      currentTaskId: "task-103",
-      tokensToday: 12220,
-      maxTokens: 40000,
-      capability: "Regression, validation, and test coverage",
-    },
-    {
-      id: "agent-ops-1",
-      name: "Pulse",
-      specialty: "ops",
-      status: "offline",
-      currentTaskId: null,
-      tokensToday: 8140,
-      maxTokens: 50000,
-      capability: "Infra, runtime health, and deployment safety",
-    },
-    {
-      id: "agent-auto-1",
-      name: "Vector",
-      specialty: "automation",
-      status: "idle",
-      currentTaskId: null,
-      tokensToday: 9640,
-      maxTokens: 55000,
-      capability: "Workflow automation and agent routing",
-    },
-    {
-      id: "agent-prod-1",
-      name: "North",
-      specialty: "product",
-      status: "idle",
-      currentTaskId: null,
-      tokensToday: 4920,
-      maxTokens: 28000,
-      capability: "Scope, definition, and approval quality",
-    },
-  ],
-  activity: [
-    {
-      id: "activity-1",
-      message: "Sentinel is validating approval edge cases in the regression checklist.",
-      time: Date.now() - 1000 * 60 * 12,
-      tone: "busy",
-    },
-    {
-      id: "activity-2",
-      message: "Migration runbook UI is approved and waiting for the best frontend agent to claim it.",
-      time: Date.now() - 1000 * 60 * 26,
-      tone: "info",
-    },
-    {
-      id: "activity-3",
-      message: "Invoice ingestion hardening is blocked on human approval, so no agent can touch it yet.",
-      time: Date.now() - 1000 * 60 * 35,
-      tone: "warning",
-    },
-  ],
-};
+let dashboard = null;
+let pollHandle = null;
+let isMutating = false;
 
-let state = loadState();
-let autoClaimInterval = null;
+const statsGrid = document.getElementById('stats-grid');
+const kanbanBoard = document.getElementById('kanban-board');
+const approvalList = document.getElementById('approval-list');
+const agentList = document.getElementById('agent-list');
+const usageList = document.getElementById('usage-list');
+const activityList = document.getElementById('activity-list');
+const taskForm = document.getElementById('task-form');
+const approvalCountPill = document.getElementById('approval-count-pill');
+const runningAgentsPill = document.getElementById('running-agents-pill');
+const tokenTotalPill = document.getElementById('token-total-pill');
+const resetButton = document.getElementById('reset-button');
+const seedReadyButton = document.getElementById('seed-ready-button');
+const newTaskButton = document.getElementById('new-task-button');
+const refreshButton = document.getElementById('refresh-button');
+const cardTemplate = document.getElementById('task-card-template');
+const sessionList = document.getElementById('session-list');
+const backgroundTaskList = document.getElementById('background-task-list');
+const sessionCountPill = document.getElementById('session-count-pill');
+const backgroundTaskPill = document.getElementById('background-task-pill');
 
-const statsGrid = document.getElementById("stats-grid");
-const kanbanBoard = document.getElementById("kanban-board");
-const approvalList = document.getElementById("approval-list");
-const agentList = document.getElementById("agent-list");
-const usageList = document.getElementById("usage-list");
-const activityList = document.getElementById("activity-list");
-const taskForm = document.getElementById("task-form");
-const approvalCountPill = document.getElementById("approval-count-pill");
-const runningAgentsPill = document.getElementById("running-agents-pill");
-const tokenTotalPill = document.getElementById("token-total-pill");
-const autoClaimButton = document.getElementById("auto-claim-button");
-const resetButton = document.getElementById("reset-button");
-const seedReadyButton = document.getElementById("seed-ready-button");
-const newTaskButton = document.getElementById("new-task-button");
-const cardTemplate = document.getElementById("task-card-template");
-
-function loadState() {
-  const stored = window.localStorage.getItem(STORAGE_KEY);
-  if (!stored) {
-    return structuredClone(seedState);
-  }
-
-  try {
-    return JSON.parse(stored);
-  } catch {
-    return structuredClone(seedState);
-  }
-}
-
-function saveState() {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function structuredClone(data) {
-  return JSON.parse(JSON.stringify(data));
-}
-
-function nextId(prefix) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function addActivity(message, tone = "info") {
-  state.activity.unshift({
-    id: nextId("activity"),
-    message,
-    time: Date.now(),
-    tone,
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+    ...options,
   });
-  state.activity = state.activity.slice(0, 18);
-}
 
-function getAgent(agentId) {
-  return state.agents.find((agent) => agent.id === agentId) || null;
-}
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await response.json() : await response.text();
 
-function getTask(taskId) {
-  return state.tasks.find((task) => task.id === taskId) || null;
-}
-
-function releaseAgent(task) {
-  if (!task.assignedAgentId) {
-    return;
+  if (!response.ok) {
+    const message = typeof data === 'string' ? data : data?.message || data?.error || 'Request failed';
+    throw new Error(message);
   }
 
-  const agent = getAgent(task.assignedAgentId);
-  if (!agent) {
-    return;
-  }
-
-  if (agent.currentTaskId === task.id) {
-    agent.currentTaskId = null;
-  }
-
-  if (agent.status !== "offline") {
-    agent.status = "idle";
-  }
-}
-
-function markAgentBusy(agent, task) {
-  agent.currentTaskId = task.id;
-  agent.status = "busy";
-  agent.tokensToday = Math.min(agent.maxTokens, agent.tokensToday + randomInt(800, 3400));
-}
-
-function randomInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function bestAgentForTask(task) {
-  const candidates = state.agents
-    .filter((agent) => agent.status === "idle" && agent.specialty === task.skill)
-    .sort((a, b) => a.tokensToday - b.tokensToday);
-  return candidates[0] || null;
-}
-
-function syncAgentAssignments() {
-  state.agents.forEach((agent) => {
-    const currentTask = state.tasks.find((task) => task.assignedAgentId === agent.id && task.lane === "inprogress");
-    if (agent.status !== "offline") {
-      agent.status = currentTask ? "busy" : "idle";
-    }
-    agent.currentTaskId = currentTask ? currentTask.id : null;
-  });
-}
-
-function createTask({ title, notes, priority, skill, owner, lane = "intake" }) {
-  state.tasks.unshift({
-    id: nextId("task"),
-    title,
-    notes,
-    priority,
-    skill,
-    owner: owner || "Unassigned stream",
-    lane,
-    assignedAgentId: null,
-    createdAt: Date.now(),
-  });
-  addActivity(`New task created in ${laneLabel(lane)}: ${title}.`, "info");
+  return data;
 }
 
 function laneLabel(laneId) {
-  return lanes.find((lane) => lane.id === laneId)?.title || laneId;
+  return dashboard?.lanes.find((lane) => lane.id === laneId)?.title || laneId;
 }
 
-function moveTask(taskId, direction) {
-  const task = getTask(taskId);
-  if (!task) {
-    return;
-  }
-
-  const currentIndex = lanes.findIndex((lane) => lane.id === task.lane);
-  const nextIndex = currentIndex + direction;
-  if (nextIndex < 0 || nextIndex >= lanes.length) {
-    return;
-  }
-
-  const nextLane = lanes[nextIndex].id;
-
-  if (task.lane === "approval" && nextLane === "ready") {
-    approveTask(taskId);
-    return;
-  }
-
-  if (task.lane === "ready" && nextLane === "inprogress") {
-    claimTask(taskId);
-    return;
-  }
-
-  if (task.lane === "inprogress" && nextLane === "review") {
-    task.lane = "review";
-    addActivity(`${task.title} moved into review.`, "busy");
-    saveAndRender();
-    return;
-  }
-
-  if (task.lane === "review" && nextLane === "done") {
-    task.lane = "done";
-    releaseAgent(task);
-    addActivity(`${task.title} completed and archived to Done.`, "info");
-    saveAndRender();
-    return;
-  }
-
-  if (task.lane === "inprogress" && direction < 0) {
-    task.lane = "ready";
-    releaseAgent(task);
-    task.assignedAgentId = null;
-    addActivity(`${task.title} moved back to Ready for Agents.`, "warning");
-    saveAndRender();
-    return;
-  }
-
-  task.lane = nextLane;
-  addActivity(`${task.title} moved to ${laneLabel(nextLane)}.`, "info");
-  saveAndRender();
-}
-
-function approveTask(taskId) {
-  const task = getTask(taskId);
-  if (!task || task.lane !== "approval") {
-    return;
-  }
-
-  task.lane = "ready";
-  addActivity(`${task.title} approved. Agents may now claim it.`, "info");
-  saveAndRender();
-
-  if (state.autoClaimEnabled) {
-    autoClaimOnce();
-  }
-}
-
-function claimTask(taskId) {
-  const task = getTask(taskId);
-  if (!task || task.lane !== "ready") {
-    return;
-  }
-
-  const agent = bestAgentForTask(task);
-  if (!agent) {
-    addActivity(`No idle ${skillLabels[task.skill]} agent available for ${task.title}.`, "warning");
-    saveAndRender();
-    return;
-  }
-
-  task.lane = "inprogress";
-  task.assignedAgentId = agent.id;
-  markAgentBusy(agent, task);
-  addActivity(`${agent.name} claimed ${task.title}.`, "busy");
-  saveAndRender();
-}
-
-function autoClaimOnce() {
-  const readyTasks = state.tasks
-    .filter((task) => task.lane === "ready")
-    .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || a.createdAt - b.createdAt);
-
-  let claimedAny = false;
-  readyTasks.forEach((task) => {
-    const agent = bestAgentForTask(task);
-    if (!agent) {
-      return;
-    }
-    task.lane = "inprogress";
-    task.assignedAgentId = agent.id;
-    markAgentBusy(agent, task);
-    addActivity(`${agent.name} auto-claimed ${task.title}.`, "busy");
-    claimedAny = true;
-  });
-
-  if (claimedAny) {
-    saveAndRender();
-  }
-}
-
-function toggleAutoClaim() {
-  state.autoClaimEnabled = !state.autoClaimEnabled;
-  if (state.autoClaimEnabled) {
-    autoClaimOnce();
-    startAutoClaimLoop();
-    addActivity("Auto-claim enabled. Idle agents can pull approved tasks.", "info");
-  } else {
-    stopAutoClaimLoop();
-    addActivity("Auto-claim disabled. Assignments are now manual.", "warning");
-  }
-  saveAndRender();
-}
-
-function startAutoClaimLoop() {
-  stopAutoClaimLoop();
-  autoClaimInterval = window.setInterval(() => {
-    autoClaimOnce();
-  }, 6000);
-}
-
-function stopAutoClaimLoop() {
-  if (autoClaimInterval) {
-    window.clearInterval(autoClaimInterval);
-    autoClaimInterval = null;
-  }
-}
-
-function resetDemo() {
-  stopAutoClaimLoop();
-  state = structuredClone(seedState);
-  addActivity("Demo state reset.", "info");
-  saveAndRender();
+function findAgent(agentId) {
+  return dashboard?.agents.find((agent) => agent.id === agentId) || null;
 }
 
 function relativeTime(timestamp) {
+  if (!timestamp) return 'n/a';
   const diffMinutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
-  if (diffMinutes < 1) {
-    return "just now";
-  }
-  if (diffMinutes < 60) {
-    return `${diffMinutes}m ago`;
-  }
+  if (diffMinutes < 1) return 'just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
   const hours = Math.floor(diffMinutes / 60);
   const minutes = diffMinutes % 60;
   return minutes ? `${hours}h ${minutes}m ago` : `${hours}h ago`;
 }
 
+function priorityClass(priority) {
+  return ['critical', 'high', 'medium', 'low'].includes(priority) ? priority : 'medium';
+}
+
+function truncate(text, max = 170) {
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max).trim()}…` : text;
+}
+
 function renderStats() {
-  const approvals = state.tasks.filter((task) => task.lane === "approval").length;
-  const ready = state.tasks.filter((task) => task.lane === "ready").length;
-  const busyAgents = state.agents.filter((agent) => agent.status === "busy").length;
-  const totalTokens = state.agents.reduce((sum, agent) => sum + agent.tokensToday, 0);
-  const doneToday = state.tasks.filter((task) => task.lane === "done").length;
+  const { metrics, openclaw } = dashboard;
   const statCards = [
     {
-      label: "Tasks in flow",
-      value: state.tasks.length,
-      detail: `${ready} approved and ready, ${approvals} waiting for approval`,
+      label: 'Tasks in flow',
+      value: metrics.taskCount,
+      detail: `${metrics.readyCount} ready, ${metrics.approvalCount} waiting for approval`,
     },
     {
-      label: "Active agents",
-      value: busyAgents,
-      detail: `${state.agents.filter((agent) => agent.status === "idle").length} idle, ${state.agents.filter((agent) => agent.status === "offline").length} offline`,
+      label: 'Live agents running',
+      value: metrics.busyAgentCount,
+      detail: `${dashboard.agents.filter((agent) => agent.status === 'idle').length} idle and ready`,
     },
     {
-      label: "Token usage today",
-      value: totalTokens.toLocaleString(),
-      detail: `Across ${state.agents.length} agent profiles`,
+      label: 'Session tokens',
+      value: metrics.totalSessionTokens.toLocaleString(),
+      detail: `${openclaw.sessions.length} OpenClaw session${openclaw.sessions.length === 1 ? '' : 's'} tracked`,
     },
     {
-      label: "Completed",
-      value: doneToday,
-      detail: state.autoClaimEnabled ? "Auto-claim is active" : "Manual assignment mode",
+      label: 'Completed after review',
+      value: metrics.doneCount,
+      detail: `${dashboard.activeRuns.length} active process${dashboard.activeRuns.length === 1 ? '' : 'es'}`,
     },
   ];
 
@@ -488,80 +114,117 @@ function renderStats() {
         </article>
       `
     )
-    .join("");
+    .join('');
 
-  approvalCountPill.textContent = `${approvals} waiting`;
-  runningAgentsPill.textContent = `${busyAgents} running`;
-  tokenTotalPill.textContent = `${totalTokens.toLocaleString()} tokens`;
-  autoClaimButton.textContent = `Auto-claim: ${state.autoClaimEnabled ? "On" : "Off"}`;
-  autoClaimButton.classList.toggle("primary", state.autoClaimEnabled);
+  approvalCountPill.textContent = `${metrics.approvalCount} waiting`;
+  runningAgentsPill.textContent = `${metrics.busyAgentCount} running`;
+  tokenTotalPill.textContent = `${metrics.totalSessionTokens.toLocaleString()} tokens`;
+  sessionCountPill.textContent = `${openclaw.sessions.length} sessions`;
+  backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length} tracked`;
 }
 
 function buildTaskActions(task) {
   const actions = [];
-  const laneIndex = lanes.findIndex((lane) => lane.id === task.lane);
+  const laneIndex = dashboard.lanes.findIndex((lane) => lane.id === task.lane);
+  const isRunning = task.runStatus === 'running';
 
-  if (laneIndex > 0) {
+  if (!isRunning && laneIndex > 0) {
     actions.push(`<button class="button ghost" data-action="move-left" data-task-id="${task.id}">← Back</button>`);
   }
 
-  if (task.lane === "approval") {
+  if (task.lane === 'approval') {
     actions.push(`<button class="button primary" data-action="approve" data-task-id="${task.id}">Approve</button>`);
-  } else if (task.lane === "ready") {
-    actions.push(`<button class="button primary" data-action="claim" data-task-id="${task.id}">Claim best-fit agent</button>`);
-    if (laneIndex < lanes.length - 1) {
-      actions.push(`<button class="button ghost" data-action="move-right" data-task-id="${task.id}">Advance</button>`);
-    }
-  } else if (task.lane === "inprogress") {
-    actions.push(`<button class="button primary" data-action="move-right" data-task-id="${task.id}">Send to review</button>`);
-  } else if (task.lane === "review") {
+  } else if (task.lane === 'ready') {
+    actions.push(`<button class="button primary" data-action="assign" data-task-id="${task.id}">Assign real agent</button>`);
+  } else if (task.lane === 'review') {
     actions.push(`<button class="button primary" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
-  } else if (laneIndex < lanes.length - 1) {
+  } else if (!isRunning && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
     actions.push(`<button class="button ghost" data-action="move-right" data-task-id="${task.id}">Advance</button>`);
   }
 
-  return actions.join("");
+  return actions.join('');
 }
 
 function renderKanban() {
-  kanbanBoard.innerHTML = "";
+  kanbanBoard.innerHTML = '';
 
-  lanes.forEach((lane) => {
-    const tasks = state.tasks
+  dashboard.lanes.forEach((lane) => {
+    const tasks = dashboard.tasks
       .filter((task) => task.lane === lane.id)
-      .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || b.createdAt - a.createdAt);
+      .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0));
 
-    const column = document.createElement("section");
-    column.className = "kanban-column";
+    const column = document.createElement('section');
+    column.className = 'kanban-column';
     column.innerHTML = `
       <div class="column-header">
         <div>
           <h3>${lane.title}</h3>
-          <span class="column-count">${tasks.length} task${tasks.length === 1 ? "" : "s"}</span>
+          <span class="column-count">${tasks.length} task${tasks.length === 1 ? '' : 's'}</span>
         </div>
       </div>
       <div class="task-stack"></div>
     `;
 
-    const stack = column.querySelector(".task-stack");
-
+    const stack = column.querySelector('.task-stack');
     if (!tasks.length) {
-      stack.innerHTML = `<div class="empty-state">No tasks in this lane.</div>`;
+      stack.innerHTML = '<div class="empty-state">No tasks in this lane.</div>';
     }
 
     tasks.forEach((task) => {
-      const taskNode = cardTemplate.content.firstElementChild.cloneNode(true);
-      taskNode.querySelector(".priority-dot").classList.add(task.priority);
-      taskNode.querySelector(".task-priority-label").textContent = task.priority;
-      taskNode.querySelector(".task-owner").textContent = task.owner || "No stream";
-      taskNode.querySelector(".task-title").textContent = task.title;
-      taskNode.querySelector(".task-notes").textContent = task.notes || "No notes yet.";
-      taskNode.querySelector(".skill-tag").textContent = skillLabels[task.skill] || task.skill;
+      const node = cardTemplate.content.firstElementChild.cloneNode(true);
+      const agent = findAgent(task.assignedAgentId);
+      const runStatus = task.lastRun?.status || task.runStatus;
+      const usage = task.lastRun?.usage?.total ? `${task.lastRun.usage.total.toLocaleString()} tokens` : null;
+      const outputPreview = task.lastRun?.output ? truncate(task.lastRun.output, 220) : '';
+      const errorPreview = task.lastRun?.error ? truncate(task.lastRun.error, 180) : '';
 
-      const agent = getAgent(task.assignedAgentId);
-      taskNode.querySelector(".assignee-tag").textContent = agent ? `Agent: ${agent.name}` : "Unassigned";
-      taskNode.querySelector(".task-actions").innerHTML = buildTaskActions(task);
-      stack.appendChild(taskNode);
+      node.querySelector('.priority-dot').classList.add(priorityClass(task.priority));
+      node.querySelector('.task-priority-label').textContent = task.priority;
+      node.querySelector('.task-owner').textContent = task.owner || 'No stream';
+      node.querySelector('.task-title').textContent = task.title;
+      node.querySelector('.task-notes').textContent = task.notes || 'No notes yet.';
+      node.querySelector('.skill-tag').textContent = skillLabels[task.skill] || task.skill;
+      node.querySelector('.assignee-tag').textContent = agent
+        ? `${agent.emoji} ${agent.name}${task.runStatus === 'running' ? ' running' : ''}`
+        : 'Unassigned';
+      node.querySelector('.task-actions').innerHTML = buildTaskActions(task);
+
+      if (runStatus && runStatus !== 'idle') {
+        const statusTag = document.createElement('span');
+        statusTag.className = 'tag';
+        statusTag.textContent = `Run: ${runStatus}`;
+        node.querySelector('.task-meta').appendChild(statusTag);
+      }
+
+      if (usage) {
+        const usageTag = document.createElement('span');
+        usageTag.className = 'tag';
+        usageTag.textContent = usage;
+        node.querySelector('.task-meta').appendChild(usageTag);
+      }
+
+      if (task.runStatus === 'running') {
+        const runningNote = document.createElement('p');
+        runningNote.className = 'task-run-note';
+        runningNote.textContent = `Live run started ${relativeTime(task.lastRun?.startedAt || task.updatedAt)}.`;
+        node.appendChild(runningNote);
+      }
+
+      if (outputPreview) {
+        const output = document.createElement('p');
+        output.className = 'task-run-note';
+        output.textContent = `Latest run: ${outputPreview}`;
+        node.appendChild(output);
+      }
+
+      if (errorPreview) {
+        const error = document.createElement('p');
+        error.className = 'task-run-note error-note';
+        error.textContent = `Runtime note: ${errorPreview}`;
+        node.appendChild(error);
+      }
+
+      stack.appendChild(node);
     });
 
     kanbanBoard.appendChild(column);
@@ -569,23 +232,18 @@ function renderKanban() {
 }
 
 function renderApprovals() {
-  const approvals = state.tasks
-    .filter((task) => task.lane === "approval")
-    .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || a.createdAt - b.createdAt);
-
-  approvalList.innerHTML = "";
-
-  if (!approvals.length) {
-    approvalList.innerHTML = `<div class="empty-state">Nothing is waiting for approval right now.</div>`;
+  approvalList.innerHTML = '';
+  if (!dashboard.approvals.length) {
+    approvalList.innerHTML = '<div class="empty-state">Nothing is waiting for approval right now.</div>';
     return;
   }
 
-  approvals.forEach((task) => {
-    const item = document.createElement("article");
-    item.className = "approval-item";
+  dashboard.approvals.forEach((task) => {
+    const item = document.createElement('article');
+    item.className = 'approval-item';
     item.innerHTML = `
       <h3>${task.title}</h3>
-      <p>${task.notes || "No definition notes provided."}</p>
+      <p>${task.notes || 'No definition notes provided.'}</p>
       <div class="approval-actions">
         <span class="tag">${task.priority}</span>
         <span class="tag">${skillLabels[task.skill] || task.skill}</span>
@@ -597,74 +255,80 @@ function renderApprovals() {
 }
 
 function renderAgents() {
-  const busyAgents = state.agents.filter((agent) => agent.status === "busy");
-  const sortedAgents = [...state.agents].sort((a, b) => {
-    const statusOrder = { busy: 0, idle: 1, offline: 2 };
-    return statusOrder[a.status] - statusOrder[b.status] || a.name.localeCompare(b.name);
+  const busyAgents = dashboard.agents.filter((agent) => agent.status === 'busy');
+  const sorted = [...dashboard.agents].sort((a, b) => {
+    const order = { busy: 0, idle: 1, unconfigured: 2 };
+    return (order[a.status] ?? 3) - (order[b.status] ?? 3) || a.name.localeCompare(b.name);
   });
 
-  agentList.innerHTML = "";
-  sortedAgents.forEach((agent) => {
-    const currentTask = getTask(agent.currentTaskId);
-    const card = document.createElement("article");
-    card.className = "agent-card";
+  agentList.innerHTML = '';
+  sorted.forEach((agent) => {
+    const card = document.createElement('article');
+    card.className = 'agent-card';
     card.innerHTML = `
       <div class="agent-status-row">
-        <h3>${agent.name}</h3>
-        <span class="status-pill status-${agent.status}">${agent.status}</span>
+        <h3>${agent.emoji} ${agent.name}</h3>
+        <span class="status-pill status-${agent.status === 'busy' ? 'busy' : agent.status === 'idle' ? 'idle' : 'offline'}">${agent.status}</span>
       </div>
       <p>${agent.capability}</p>
       <div class="agent-meta">
         <span class="tag">${skillLabels[agent.specialty] || agent.specialty}</span>
-        <span class="tag">${agent.tokensToday.toLocaleString()} tokens</span>
+        <span class="tag">${agent.model || 'model pending'}</span>
+        <span class="tag">${agent.latestUsageTokens.toLocaleString()} tokens</span>
       </div>
-      <p>${currentTask ? `Working on: ${currentTask.title}` : "No current task."}</p>
+      <p>
+        ${agent.currentTaskTitle ? `Working on: ${agent.currentTaskTitle}` : agent.lastTaskTitle ? `Last task: ${agent.lastTaskTitle}` : 'No task attached.'}
+      </p>
+      <p>${agent.sessionKey ? `Session: ${agent.sessionKey}` : 'No live session recorded yet.'}</p>
     `;
     agentList.appendChild(card);
   });
 
   if (!busyAgents.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "No agents are currently running a task.";
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No agents are currently running a task.';
     agentList.appendChild(empty);
   }
 }
 
 function renderUsage() {
-  const sortedAgents = [...state.agents].sort((a, b) => b.tokensToday - a.tokensToday);
-  usageList.innerHTML = "";
+  const maxTokens = Math.max(...dashboard.agents.map((agent) => agent.latestUsageTokens), 1);
+  usageList.innerHTML = '';
 
-  sortedAgents.forEach((agent) => {
-    const percentage = Math.round((agent.tokensToday / agent.maxTokens) * 100);
-    const card = document.createElement("article");
-    card.className = "usage-card";
-    card.innerHTML = `
-      <div class="usage-bar-row">
-        <h3>${agent.name}</h3>
-        <span>${agent.tokensToday.toLocaleString()} / ${agent.maxTokens.toLocaleString()}</span>
-      </div>
-      <p>${agent.capability}</p>
-      <div class="progress-track">
-        <div class="progress-fill" style="width: ${Math.min(percentage, 100)}%"></div>
-      </div>
-      <div class="usage-meta">
-        <span class="tag">${percentage}% budget used</span>
-        <span class="tag">${skillLabels[agent.specialty] || agent.specialty}</span>
-      </div>
-    `;
-    usageList.appendChild(card);
-  });
+  dashboard.agents
+    .slice()
+    .sort((a, b) => b.latestUsageTokens - a.latestUsageTokens)
+    .forEach((agent) => {
+      const percent = Math.round((agent.latestUsageTokens / maxTokens) * 100);
+      const card = document.createElement('article');
+      card.className = 'usage-card';
+      card.innerHTML = `
+        <div class="usage-bar-row">
+          <h3>${agent.emoji} ${agent.name}</h3>
+          <span>${agent.latestUsageTokens.toLocaleString()} tokens</span>
+        </div>
+        <p>${agent.sessionKey ? `Latest session updated ${relativeTime(agent.sessionUpdatedAt)}.` : 'No session usage yet.'}</p>
+        <div class="progress-track">
+          <div class="progress-fill" style="width: ${percent}%"></div>
+        </div>
+        <div class="usage-meta">
+          <span class="tag">${skillLabels[agent.specialty] || agent.specialty}</span>
+          <span class="tag">${percent}% of current max observed</span>
+        </div>
+      `;
+      usageList.appendChild(card);
+    });
 }
 
 function renderActivity() {
-  activityList.innerHTML = "";
-  state.activity.forEach((item) => {
-    const row = document.createElement("article");
-    row.className = "activity-item";
+  activityList.innerHTML = '';
+  dashboard.activity.forEach((item) => {
+    const row = document.createElement('article');
+    row.className = 'activity-item';
     row.innerHTML = `
       <div class="activity-header">
-        <strong>${item.tone === "warning" ? "Attention" : item.tone === "busy" ? "Agent run" : "Update"}</strong>
+        <strong>${item.tone === 'warning' ? 'Attention' : item.tone === 'busy' ? 'Agent run' : 'Update'}</strong>
         <small>${relativeTime(item.time)}</small>
       </div>
       <p>${item.message}</p>
@@ -673,85 +337,187 @@ function renderActivity() {
   });
 }
 
-function saveAndRender() {
-  syncAgentAssignments();
-  saveState();
+function renderSessions() {
+  sessionList.innerHTML = '';
+  if (!dashboard.openclaw.sessions.length) {
+    sessionList.innerHTML = '<div class="empty-state">No OpenClaw sessions are visible yet.</div>';
+    return;
+  }
+
+  dashboard.openclaw.sessions
+    .slice()
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .forEach((session) => {
+      const row = document.createElement('article');
+      row.className = 'activity-item';
+      row.innerHTML = `
+        <div class="activity-header">
+          <strong>${session.agentId}</strong>
+          <small>${relativeTime(session.updatedAt)}</small>
+        </div>
+        <p>${session.key}</p>
+        <p>${(session.totalTokens || 0).toLocaleString()} total tokens, model ${session.model || 'unknown'}.</p>
+      `;
+      sessionList.appendChild(row);
+    });
+}
+
+function renderBackgroundTasks() {
+  backgroundTaskList.innerHTML = '';
+  const activeProcessRows = dashboard.activeRuns.map((run) => {
+    const task = dashboard.tasks.find((item) => item.id === run.taskId);
+    const agent = findAgent(run.agentId);
+    return {
+      title: task?.title || run.taskId,
+      detail: `${agent ? `${agent.emoji} ${agent.name}` : run.agentId} is running it, pid ${run.pid}.`,
+      updatedAt: run.startedAt,
+      kind: 'Active process',
+    };
+  });
+
+  const taskRows = dashboard.openclaw.backgroundTasks.map((task) => ({
+    title: task.id || task.taskId || 'OpenClaw task',
+    detail: `${task.runtime || 'runtime'} · ${task.status || 'status unknown'}`,
+    updatedAt: task.updatedAt || task.startedAt || dashboard.generatedAt,
+    kind: 'Gateway task',
+  }));
+
+  const rows = [...activeProcessRows, ...taskRows];
+  if (!rows.length) {
+    backgroundTaskList.innerHTML = '<div class="empty-state">No background tasks or active agent processes right now.</div>';
+    return;
+  }
+
+  rows.forEach((item) => {
+    const row = document.createElement('article');
+    row.className = 'activity-item';
+    row.innerHTML = `
+      <div class="activity-header">
+        <strong>${item.kind}</strong>
+        <small>${relativeTime(item.updatedAt)}</small>
+      </div>
+      <p>${item.title}</p>
+      <p>${item.detail}</p>
+    `;
+    backgroundTaskList.appendChild(row);
+  });
+}
+
+function renderAll() {
   renderStats();
   renderKanban();
   renderApprovals();
   renderAgents();
   renderUsage();
   renderActivity();
+  renderSessions();
+  renderBackgroundTasks();
 }
 
-kanbanBoard.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-task-id]");
-  if (!button) {
-    return;
+async function refreshDashboard() {
+  dashboard = await api('/api/dashboard');
+  renderAll();
+}
+
+async function mutate(action) {
+  if (isMutating) return;
+  isMutating = true;
+  try {
+    await action();
+    await refreshDashboard();
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    isMutating = false;
   }
+}
+
+kanbanBoard.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-task-id]');
+  if (!button) return;
 
   const { action, taskId } = button.dataset;
-  if (action === "move-left") {
-    moveTask(taskId, -1);
+  if (action === 'move-left') {
+    mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: -1 }) }));
   }
-  if (action === "move-right") {
-    moveTask(taskId, 1);
+  if (action === 'move-right') {
+    mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: 1 }) }));
   }
-  if (action === "approve") {
-    approveTask(taskId);
+  if (action === 'approve') {
+    mutate(() => api(`/api/tasks/${taskId}/approve`, { method: 'POST' }));
   }
-  if (action === "claim") {
-    claimTask(taskId);
+  if (action === 'assign') {
+    mutate(() => api(`/api/tasks/${taskId}/assign`, { method: 'POST', body: JSON.stringify({}) }));
   }
 });
 
-approvalList.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-task-id]");
-  if (!button) {
-    return;
-  }
-  approveTask(button.dataset.taskId);
+approvalList.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-task-id]');
+  if (!button) return;
+  mutate(() => api(`/api/tasks/${button.dataset.taskId}/approve`, { method: 'POST' }));
 });
 
-taskForm.addEventListener("submit", (event) => {
+taskForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const formData = new FormData(taskForm);
-  createTask({
-    title: formData.get("title").trim(),
-    notes: formData.get("notes").trim(),
-    priority: formData.get("priority"),
-    skill: formData.get("skill"),
-    owner: formData.get("owner").trim(),
-    lane: "definition",
+  mutate(async () => {
+    await api('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: formData.get('title'),
+        notes: formData.get('notes'),
+        priority: formData.get('priority'),
+        skill: formData.get('skill'),
+        owner: formData.get('owner'),
+      }),
+    });
+    taskForm.reset();
+    document.getElementById('task-priority').value = 'medium';
   });
-  taskForm.reset();
-  document.getElementById("task-priority").value = "medium";
-  saveAndRender();
 });
 
-autoClaimButton.addEventListener("click", toggleAutoClaim);
-resetButton.addEventListener("click", resetDemo);
-seedReadyButton.addEventListener("click", () => {
-  createTask({
-    title: "Spin up reusable agent-run summary panel",
-    notes: "Create a compact summary card for live tasks, token burn, and idle capacity.",
-    priority: "high",
-    skill: "frontend",
-    owner: "Internal Tools",
-    lane: "ready",
+seedReadyButton.addEventListener('click', () => {
+  mutate(async () => {
+    const created = await api('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'Spin up reusable agent-run summary panel',
+        notes: 'Create a compact summary card for live tasks, token burn, and idle capacity.',
+        priority: 'high',
+        skill: 'frontend',
+        owner: 'Internal Tools',
+      }),
+    });
+    await api(`/api/tasks/${created.task.id}/move`, { method: 'POST', body: JSON.stringify({ direction: 1 }) });
+    await api(`/api/tasks/${created.task.id}/approve`, { method: 'POST' });
   });
-  saveAndRender();
-  if (state.autoClaimEnabled) {
-    autoClaimOnce();
+});
+
+resetButton.addEventListener('click', () => {
+  if (!window.confirm('Reset the board to the current seed state?')) return;
+  mutate(() => api('/api/reset', { method: 'POST' }));
+});
+
+refreshButton.addEventListener('click', () => {
+  mutate(() => refreshDashboard());
+});
+
+newTaskButton.addEventListener('click', () => {
+  document.getElementById('task-title').focus();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
+async function bootstrap() {
+  try {
+    await refreshDashboard();
+    pollHandle = window.setInterval(() => {
+      refreshDashboard().catch((error) => {
+        console.error(error);
+      });
+    }, 4000);
+  } catch (error) {
+    window.alert(`Dashboard failed to load: ${error.message}`);
   }
-});
-newTaskButton.addEventListener("click", () => {
-  document.getElementById("task-title").focus();
-  window.scrollTo({ top: 0, behavior: "smooth" });
-});
-
-if (state.autoClaimEnabled) {
-  startAutoClaimLoop();
 }
 
-saveAndRender();
+bootstrap();
