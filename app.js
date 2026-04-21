@@ -102,6 +102,34 @@ function applyView() {
   });
 }
 
+function populateFormOptions() {
+  const agentSelect = document.getElementById('task-agent');
+  const projectSelect = document.getElementById('task-owner');
+
+  const currentAgentValue = agentSelect.value;
+  const currentProjectValue = projectSelect.value;
+
+  agentSelect.innerHTML = dashboard.agents
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(
+      (agent) => `<option value="${agent.id}">${agent.name} (${skillLabels[agent.specialty] || agent.specialty})</option>`
+    )
+    .join('');
+
+  projectSelect.innerHTML = dashboard.projects
+    .map((project) => `<option value="${project}">${project}</option>`)
+    .join('');
+
+  if (currentAgentValue && dashboard.agents.some((agent) => agent.id === currentAgentValue)) {
+    agentSelect.value = currentAgentValue;
+  }
+
+  if (currentProjectValue && dashboard.projects.includes(currentProjectValue)) {
+    projectSelect.value = currentProjectValue;
+  }
+}
+
 function findAgent(agentId) {
   return dashboard?.agents.find((agent) => agent.id === agentId) || null;
 }
@@ -190,6 +218,10 @@ function buildTaskActions(task) {
     actions.push(`<button class="button primary" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
   } else if (!isRunning && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
     actions.push(`<button class="button ghost" data-action="move-right" data-task-id="${task.id}">Advance</button>`);
+  }
+
+  if (!isRunning) {
+    actions.push(`<button class="button ghost danger" data-action="delete" data-task-id="${task.id}">Delete</button>`);
   }
 
   return actions.join('');
@@ -314,6 +346,16 @@ function renderKanban() {
         ? `${agent.emoji} ${agent.name}${task.runStatus === 'running' ? ' running' : ''}`
         : 'Unassigned';
       node.querySelector('.task-actions').innerHTML = buildTaskActions(task);
+
+      if (task.preferredAgentId) {
+        const preferredAgent = findAgent(task.preferredAgentId);
+        if (preferredAgent) {
+          const preferredTag = document.createElement('span');
+          preferredTag.className = 'tag';
+          preferredTag.textContent = `Preferred: ${preferredAgent.name}`;
+          node.querySelector('.task-meta').appendChild(preferredTag);
+        }
+      }
 
       if (runStatus && runStatus !== 'idle') {
         const statusTag = document.createElement('span');
@@ -492,6 +534,7 @@ function renderBackgroundTasks() {
 
 function renderAll() {
   renderStats();
+  populateFormOptions();
   renderOverview();
   renderApprovals();
   renderKanban();
@@ -544,6 +587,10 @@ document.addEventListener('click', (event) => {
   if (action === 'assign') {
     mutate(() => api(`/api/tasks/${taskId}/assign`, { method: 'POST', body: JSON.stringify({}) }));
   }
+  if (action === 'delete') {
+    if (!window.confirm('Delete this task from the board?')) return;
+    mutate(() => api(`/api/tasks/${taskId}/delete`, { method: 'POST' }));
+  }
 });
 
 taskForm.addEventListener('submit', (event) => {
@@ -556,7 +603,7 @@ taskForm.addEventListener('submit', (event) => {
         title: formData.get('title'),
         notes: formData.get('notes'),
         priority: formData.get('priority'),
-        skill: formData.get('skill'),
+        agentId: formData.get('agentId'),
         owner: formData.get('owner'),
       }),
     });
@@ -573,7 +620,7 @@ seedReadyButton.addEventListener('click', () => {
         title: 'Spin up reusable agent-run summary panel',
         notes: 'Create a compact summary card for live tasks, token burn, and idle capacity.',
         priority: 'high',
-        skill: 'frontend',
+        agentId: 'atlas',
         owner: 'Internal Tools',
       }),
     });

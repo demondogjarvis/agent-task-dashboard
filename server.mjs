@@ -71,6 +71,16 @@ const agentCatalog = [
   },
 ];
 
+const projectCatalog = [
+  'Agent Control',
+  'Northstar Finance',
+  'Atlas Rollout',
+  'Launch Ops',
+  'Internal Tools',
+  'Internal',
+  'Unassigned stream',
+];
+
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -136,12 +146,15 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const preferredAgent = agentCatalog.find((agent) => agent.id === String(body.agentId || '').trim()) || null;
+
     const task = {
       id: nextId('task'),
       title,
       notes: String(body.notes || '').trim(),
       priority: sanitizePriority(body.priority),
-      skill: sanitizeSkill(body.skill),
+      skill: preferredAgent ? preferredAgent.specialty : sanitizeSkill(body.skill),
+      preferredAgentId: preferredAgent?.id || null,
       owner: String(body.owner || '').trim() || 'Unassigned stream',
       lane: 'definition',
       assignedAgentId: null,
@@ -166,7 +179,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|assign)$/);
+  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|assign|delete)$/);
   if (!taskRoute) {
     sendJson(res, 404, { error: 'not_found' });
     return;
@@ -226,6 +239,19 @@ async function handleApi(req, res, url) {
     }
     await launchTaskRun(task, agent);
     sendJson(res, 202, { ok: true, taskId: task.id, agentId: agent.id });
+    return;
+  }
+
+  if (action === 'delete') {
+    if (activeRuns.has(task.id) || task.runStatus === 'running') {
+      sendJson(res, 400, { error: 'invalid_state', message: 'Running tasks cannot be deleted.' });
+      return;
+    }
+
+    state.tasks = state.tasks.filter((item) => item.id !== task.id);
+    pushActivity(`${task.title} was deleted from the board.`, 'warning');
+    await persistState();
+    sendJson(res, 200, { ok: true, taskId: task.id });
     return;
   }
 
@@ -391,11 +417,12 @@ function buildTaskPrompt(task, agent) {
 
 function pickAgentForTask(task, requestedAgentId) {
   const busyAgentIds = new Set(Array.from(activeRuns.values()).map((run) => run.agentId));
+  const preferredAgentId = requestedAgentId || task.preferredAgentId || null;
   const agents = agentCatalog
     .filter((agent) => !busyAgentIds.has(agent.id))
-    .filter((agent) => (requestedAgentId ? agent.id === requestedAgentId : agent.specialty === task.skill));
+    .filter((agent) => (preferredAgentId ? agent.id === preferredAgentId : agent.specialty === task.skill));
 
-  if (requestedAgentId) {
+  if (preferredAgentId) {
     return agents[0] || null;
   }
 
@@ -444,6 +471,7 @@ async function buildDashboardPayload() {
 
   return {
     generatedAt: Date.now(),
+    projects: projectCatalog,
     lanes,
     tasks: [...state.tasks].sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0)),
     activity: state.activity.slice(0, 20),
