@@ -8,29 +8,58 @@ const skillLabels = {
   product: 'Product',
 };
 
+const viewMeta = {
+  overview: {
+    title: 'Overview',
+    description: 'See the current approval load, ready queue, active specialists, and the latest movement across the system.',
+  },
+  tasks: {
+    title: 'Tasks',
+    description: 'Define work, approve it, and move it through the execution lanes.',
+  },
+  agents: {
+    title: 'Agents',
+    description: 'Browse the specialist agents that exist, what they handle, and their current token footprint.',
+  },
+  runtime: {
+    title: 'Runtime',
+    description: 'Inspect OpenClaw session telemetry, tracked background state, and orchestration events.',
+  },
+};
+
 let dashboard = null;
 let pollHandle = null;
 let isMutating = false;
 
 const statsGrid = document.getElementById('stats-grid');
-const kanbanBoard = document.getElementById('kanban-board');
 const approvalList = document.getElementById('approval-list');
+const approvalCountPill = document.getElementById('approval-count-pill');
+const overviewApprovalList = document.getElementById('overview-approval-list');
+const overviewApprovalPill = document.getElementById('overview-approval-pill');
+const overviewReadyList = document.getElementById('overview-ready-list');
+const overviewReadyPill = document.getElementById('overview-ready-pill');
+const overviewAgentPreview = document.getElementById('overview-agent-preview');
+const overviewAgentPill = document.getElementById('overview-agent-pill');
+const overviewActivityList = document.getElementById('overview-activity-list');
+const kanbanBoard = document.getElementById('kanban-board');
 const agentList = document.getElementById('agent-list');
 const usageList = document.getElementById('usage-list');
 const activityList = document.getElementById('activity-list');
+const sessionList = document.getElementById('session-list');
+const backgroundTaskList = document.getElementById('background-task-list');
 const taskForm = document.getElementById('task-form');
-const approvalCountPill = document.getElementById('approval-count-pill');
-const runningAgentsPill = document.getElementById('running-agents-pill');
 const tokenTotalPill = document.getElementById('token-total-pill');
+const runningAgentsPill = document.getElementById('running-agents-pill');
+const sessionCountPill = document.getElementById('session-count-pill');
+const backgroundTaskPill = document.getElementById('background-task-pill');
+const agentCountPill = document.getElementById('agent-count-pill');
 const resetButton = document.getElementById('reset-button');
 const seedReadyButton = document.getElementById('seed-ready-button');
 const newTaskButton = document.getElementById('new-task-button');
 const refreshButton = document.getElementById('refresh-button');
+const pageTitle = document.getElementById('page-title');
+const pageDescription = document.getElementById('page-description');
 const cardTemplate = document.getElementById('task-card-template');
-const sessionList = document.getElementById('session-list');
-const backgroundTaskList = document.getElementById('background-task-list');
-const sessionCountPill = document.getElementById('session-count-pill');
-const backgroundTaskPill = document.getElementById('background-task-pill');
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -52,8 +81,25 @@ async function api(path, options = {}) {
   return data;
 }
 
-function laneLabel(laneId) {
-  return dashboard?.lanes.find((lane) => lane.id === laneId)?.title || laneId;
+function getCurrentView() {
+  const view = window.location.hash.replace('#', '') || 'overview';
+  return viewMeta[view] ? view : 'overview';
+}
+
+function applyView() {
+  const view = getCurrentView();
+  const meta = viewMeta[view];
+
+  pageTitle.textContent = meta.title;
+  pageDescription.textContent = meta.description;
+
+  document.querySelectorAll('.page-view').forEach((section) => {
+    section.classList.toggle('active', section.dataset.view === view);
+  });
+
+  document.querySelectorAll('[data-view-link]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.viewLink === view);
+  });
 }
 
 function findAgent(agentId) {
@@ -117,10 +163,14 @@ function renderStats() {
     .join('');
 
   approvalCountPill.textContent = `${metrics.approvalCount} waiting`;
+  overviewApprovalPill.textContent = `${metrics.approvalCount} waiting`;
+  overviewReadyPill.textContent = `${metrics.readyCount} ready`;
+  overviewAgentPill.textContent = `${dashboard.agents.length} agents`;
   runningAgentsPill.textContent = `${metrics.busyAgentCount} running`;
   tokenTotalPill.textContent = `${metrics.totalSessionTokens.toLocaleString()} tokens`;
   sessionCountPill.textContent = `${openclaw.sessions.length} sessions`;
   backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length} tracked`;
+  agentCountPill.textContent = `${dashboard.agents.length} agents`;
 }
 
 function buildTaskActions(task) {
@@ -143,6 +193,82 @@ function buildTaskActions(task) {
   }
 
   return actions.join('');
+}
+
+function buildSummaryTaskCard(task, mode) {
+  const actionLabel = mode === 'approval' ? 'Approve' : mode === 'ready' ? 'Assign' : null;
+  const action = actionLabel
+    ? `<button class="button ${mode === 'approval' ? 'ghost' : 'primary'}" data-action="${mode === 'approval' ? 'approve' : 'assign'}" data-task-id="${task.id}">${actionLabel}</button>`
+    : '';
+
+  return `
+    <article class="approval-item">
+      <h3>${task.title}</h3>
+      <p>${task.notes || 'No definition notes provided.'}</p>
+      <div class="approval-actions">
+        <span class="tag">${task.priority}</span>
+        <span class="tag">${skillLabels[task.skill] || task.skill}</span>
+        ${action}
+      </div>
+    </article>
+  `;
+}
+
+function renderOverview() {
+  const approvals = dashboard.approvals.slice(0, 4);
+  const readyTasks = dashboard.tasks.filter((task) => task.lane === 'ready').slice(0, 4);
+  const agents = dashboard.agents.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const activity = dashboard.activity.slice(0, 6);
+
+  overviewApprovalList.innerHTML = approvals.length
+    ? approvals.map((task) => buildSummaryTaskCard(task, 'approval')).join('')
+    : '<div class="empty-state">Nothing is waiting for approval right now.</div>';
+
+  overviewReadyList.innerHTML = readyTasks.length
+    ? readyTasks.map((task) => buildSummaryTaskCard(task, 'ready')).join('')
+    : '<div class="empty-state">No approved tasks are waiting for assignment.</div>';
+
+  overviewAgentPreview.innerHTML = agents.length
+    ? agents
+        .map(
+          (agent) => `
+            <article class="agent-card">
+              <div class="agent-status-row">
+                <h3>${agent.emoji} ${agent.name}</h3>
+                <span class="status-pill status-${agent.status === 'busy' ? 'busy' : agent.status === 'idle' ? 'idle' : 'offline'}">${agent.status}</span>
+              </div>
+              <p>${skillLabels[agent.specialty] || agent.specialty}</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No agents found.</div>';
+
+  overviewActivityList.innerHTML = activity.length
+    ? activity
+        .map(
+          (item) => `
+            <article class="activity-item">
+              <div class="activity-header">
+                <strong>${item.tone === 'warning' ? 'Attention' : item.tone === 'busy' ? 'Agent run' : 'Update'}</strong>
+                <small>${relativeTime(item.time)}</small>
+              </div>
+              <p>${item.message}</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No recent activity.</div>';
+}
+
+function renderApprovals() {
+  approvalList.innerHTML = '';
+  if (!dashboard.approvals.length) {
+    approvalList.innerHTML = '<div class="empty-state">Nothing is waiting for approval right now.</div>';
+    return;
+  }
+
+  approvalList.innerHTML = dashboard.approvals.map((task) => buildSummaryTaskCard(task, 'approval')).join('');
 }
 
 function renderKanban() {
@@ -231,139 +357,102 @@ function renderKanban() {
   });
 }
 
-function renderApprovals() {
-  approvalList.innerHTML = '';
-  if (!dashboard.approvals.length) {
-    approvalList.innerHTML = '<div class="empty-state">Nothing is waiting for approval right now.</div>';
-    return;
-  }
-
-  dashboard.approvals.forEach((task) => {
-    const item = document.createElement('article');
-    item.className = 'approval-item';
-    item.innerHTML = `
-      <h3>${task.title}</h3>
-      <p>${task.notes || 'No definition notes provided.'}</p>
-      <div class="approval-actions">
-        <span class="tag">${task.priority}</span>
-        <span class="tag">${skillLabels[task.skill] || task.skill}</span>
-        <button class="button primary" data-action="approve" data-task-id="${task.id}">Approve for agents</button>
-      </div>
-    `;
-    approvalList.appendChild(item);
-  });
-}
-
 function renderAgents() {
-  const busyAgents = dashboard.agents.filter((agent) => agent.status === 'busy');
-  const sorted = [...dashboard.agents].sort((a, b) => {
-    const order = { busy: 0, idle: 1, unconfigured: 2 };
-    return (order[a.status] ?? 3) - (order[b.status] ?? 3) || a.name.localeCompare(b.name);
-  });
+  const sorted = [...dashboard.agents].sort((a, b) => a.name.localeCompare(b.name));
 
-  agentList.innerHTML = '';
-  sorted.forEach((agent) => {
-    const card = document.createElement('article');
-    card.className = 'agent-card';
-    card.innerHTML = `
-      <div class="agent-status-row">
-        <h3>${agent.emoji} ${agent.name}</h3>
-        <span class="status-pill status-${agent.status === 'busy' ? 'busy' : agent.status === 'idle' ? 'idle' : 'offline'}">${agent.status}</span>
-      </div>
-      <p>${agent.capability}</p>
-      <div class="agent-meta">
-        <span class="tag">${skillLabels[agent.specialty] || agent.specialty}</span>
-        <span class="tag">${agent.model || 'model pending'}</span>
-        <span class="tag">${agent.latestUsageTokens.toLocaleString()} tokens</span>
-      </div>
-      <p>
-        ${agent.currentTaskTitle ? `Working on: ${agent.currentTaskTitle}` : agent.lastTaskTitle ? `Last task: ${agent.lastTaskTitle}` : 'No task attached.'}
-      </p>
-      <p>${agent.sessionKey ? `Session: ${agent.sessionKey}` : 'No live session recorded yet.'}</p>
-    `;
-    agentList.appendChild(card);
-  });
-
-  if (!busyAgents.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = 'No agents are currently running a task.';
-    agentList.appendChild(empty);
-  }
+  agentList.innerHTML = sorted.length
+    ? sorted
+        .map(
+          (agent) => `
+            <article class="agent-card">
+              <div class="agent-status-row">
+                <h3>${agent.emoji} ${agent.name}</h3>
+                <span class="status-pill status-${agent.status === 'busy' ? 'busy' : agent.status === 'idle' ? 'idle' : 'offline'}">${agent.status}</span>
+              </div>
+              <p>${agent.capability}</p>
+              <div class="agent-meta">
+                <span class="tag">${skillLabels[agent.specialty] || agent.specialty}</span>
+                <span class="tag">${agent.model || 'model pending'}</span>
+                <span class="tag">${agent.latestUsageTokens.toLocaleString()} tokens</span>
+              </div>
+              <p>${agent.currentTaskTitle ? `Working on: ${agent.currentTaskTitle}` : agent.lastTaskTitle ? `Last task: ${agent.lastTaskTitle}` : 'No task attached.'}</p>
+              <p>${agent.sessionKey ? `Session: ${agent.sessionKey}` : 'No live session recorded yet.'}</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No agents found.</div>';
 }
 
 function renderUsage() {
   const maxTokens = Math.max(...dashboard.agents.map((agent) => agent.latestUsageTokens), 1);
-  usageList.innerHTML = '';
-
-  dashboard.agents
-    .slice()
-    .sort((a, b) => b.latestUsageTokens - a.latestUsageTokens)
-    .forEach((agent) => {
-      const percent = Math.round((agent.latestUsageTokens / maxTokens) * 100);
-      const card = document.createElement('article');
-      card.className = 'usage-card';
-      card.innerHTML = `
-        <div class="usage-bar-row">
-          <h3>${agent.emoji} ${agent.name}</h3>
-          <span>${agent.latestUsageTokens.toLocaleString()} tokens</span>
-        </div>
-        <p>${agent.sessionKey ? `Latest session updated ${relativeTime(agent.sessionUpdatedAt)}.` : 'No session usage yet.'}</p>
-        <div class="progress-track">
-          <div class="progress-fill" style="width: ${percent}%"></div>
-        </div>
-        <div class="usage-meta">
-          <span class="tag">${skillLabels[agent.specialty] || agent.specialty}</span>
-          <span class="tag">${percent}% of current max observed</span>
-        </div>
-      `;
-      usageList.appendChild(card);
-    });
+  usageList.innerHTML = dashboard.agents.length
+    ? dashboard.agents
+        .slice()
+        .sort((a, b) => b.latestUsageTokens - a.latestUsageTokens)
+        .map((agent) => {
+          const percent = Math.round((agent.latestUsageTokens / maxTokens) * 100);
+          return `
+            <article class="usage-card">
+              <div class="usage-bar-row">
+                <h3>${agent.emoji} ${agent.name}</h3>
+                <span>${agent.latestUsageTokens.toLocaleString()} tokens</span>
+              </div>
+              <p>${agent.sessionKey ? `Latest session updated ${relativeTime(agent.sessionUpdatedAt)}.` : 'No session usage yet.'}</p>
+              <div class="progress-track">
+                <div class="progress-fill" style="width: ${percent}%"></div>
+              </div>
+              <div class="usage-meta">
+                <span class="tag">${skillLabels[agent.specialty] || agent.specialty}</span>
+                <span class="tag">${percent}% of current max observed</span>
+              </div>
+            </article>
+          `;
+        })
+        .join('')
+    : '<div class="empty-state">No usage data yet.</div>';
 }
 
 function renderActivity() {
-  activityList.innerHTML = '';
-  dashboard.activity.forEach((item) => {
-    const row = document.createElement('article');
-    row.className = 'activity-item';
-    row.innerHTML = `
-      <div class="activity-header">
-        <strong>${item.tone === 'warning' ? 'Attention' : item.tone === 'busy' ? 'Agent run' : 'Update'}</strong>
-        <small>${relativeTime(item.time)}</small>
-      </div>
-      <p>${item.message}</p>
-    `;
-    activityList.appendChild(row);
-  });
+  activityList.innerHTML = dashboard.activity.length
+    ? dashboard.activity
+        .map(
+          (item) => `
+            <article class="activity-item">
+              <div class="activity-header">
+                <strong>${item.tone === 'warning' ? 'Attention' : item.tone === 'busy' ? 'Agent run' : 'Update'}</strong>
+                <small>${relativeTime(item.time)}</small>
+              </div>
+              <p>${item.message}</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No activity captured yet.</div>';
 }
 
 function renderSessions() {
-  sessionList.innerHTML = '';
-  if (!dashboard.openclaw.sessions.length) {
-    sessionList.innerHTML = '<div class="empty-state">No OpenClaw sessions are visible yet.</div>';
-    return;
-  }
-
-  dashboard.openclaw.sessions
-    .slice()
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-    .forEach((session) => {
-      const row = document.createElement('article');
-      row.className = 'activity-item';
-      row.innerHTML = `
-        <div class="activity-header">
-          <strong>${session.agentId}</strong>
-          <small>${relativeTime(session.updatedAt)}</small>
-        </div>
-        <p>${session.key}</p>
-        <p>${(session.totalTokens || 0).toLocaleString()} total tokens, model ${session.model || 'unknown'}.</p>
-      `;
-      sessionList.appendChild(row);
-    });
+  sessionList.innerHTML = dashboard.openclaw.sessions.length
+    ? dashboard.openclaw.sessions
+        .slice()
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .map(
+          (session) => `
+            <article class="activity-item">
+              <div class="activity-header">
+                <strong>${session.agentId}</strong>
+                <small>${relativeTime(session.updatedAt)}</small>
+              </div>
+              <p>${session.key}</p>
+              <p>${(session.totalTokens || 0).toLocaleString()} total tokens, model ${session.model || 'unknown'}.</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No OpenClaw sessions are visible yet.</div>';
 }
 
 function renderBackgroundTasks() {
-  backgroundTaskList.innerHTML = '';
   const activeProcessRows = dashboard.activeRuns.map((run) => {
     const task = dashboard.tasks.find((item) => item.id === run.taskId);
     const agent = findAgent(run.agentId);
@@ -383,35 +472,35 @@ function renderBackgroundTasks() {
   }));
 
   const rows = [...activeProcessRows, ...taskRows];
-  if (!rows.length) {
-    backgroundTaskList.innerHTML = '<div class="empty-state">No background tasks or active agent processes right now.</div>';
-    return;
-  }
-
-  rows.forEach((item) => {
-    const row = document.createElement('article');
-    row.className = 'activity-item';
-    row.innerHTML = `
-      <div class="activity-header">
-        <strong>${item.kind}</strong>
-        <small>${relativeTime(item.updatedAt)}</small>
-      </div>
-      <p>${item.title}</p>
-      <p>${item.detail}</p>
-    `;
-    backgroundTaskList.appendChild(row);
-  });
+  backgroundTaskList.innerHTML = rows.length
+    ? rows
+        .map(
+          (item) => `
+            <article class="activity-item">
+              <div class="activity-header">
+                <strong>${item.kind}</strong>
+                <small>${relativeTime(item.updatedAt)}</small>
+              </div>
+              <p>${item.title}</p>
+              <p>${item.detail}</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No background tasks or active agent processes right now.</div>';
 }
 
 function renderAll() {
   renderStats();
-  renderKanban();
+  renderOverview();
   renderApprovals();
+  renderKanban();
   renderAgents();
   renderUsage();
   renderActivity();
   renderSessions();
   renderBackgroundTasks();
+  applyView();
 }
 
 async function refreshDashboard() {
@@ -432,11 +521,17 @@ async function mutate(action) {
   }
 }
 
-kanbanBoard.addEventListener('click', (event) => {
-  const button = event.target.closest('button[data-task-id]');
-  if (!button) return;
+document.addEventListener('click', (event) => {
+  const navButton = event.target.closest('[data-view-link]');
+  if (navButton) {
+    window.location.hash = navButton.dataset.viewLink;
+    return;
+  }
 
-  const { action, taskId } = button.dataset;
+  const taskButton = event.target.closest('button[data-task-id]');
+  if (!taskButton) return;
+
+  const { action, taskId } = taskButton.dataset;
   if (action === 'move-left') {
     mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: -1 }) }));
   }
@@ -449,12 +544,6 @@ kanbanBoard.addEventListener('click', (event) => {
   if (action === 'assign') {
     mutate(() => api(`/api/tasks/${taskId}/assign`, { method: 'POST', body: JSON.stringify({}) }));
   }
-});
-
-approvalList.addEventListener('click', (event) => {
-  const button = event.target.closest('button[data-task-id]');
-  if (!button) return;
-  mutate(() => api(`/api/tasks/${button.dataset.taskId}/approve`, { method: 'POST' }));
 });
 
 taskForm.addEventListener('submit', (event) => {
@@ -499,15 +588,20 @@ resetButton.addEventListener('click', () => {
 });
 
 refreshButton.addEventListener('click', () => {
-  mutate(() => refreshDashboard());
+  refreshDashboard().catch((error) => window.alert(error.message));
 });
 
 newTaskButton.addEventListener('click', () => {
+  window.location.hash = 'tasks';
+  applyView();
   document.getElementById('task-title').focus();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
+window.addEventListener('hashchange', applyView);
+
 async function bootstrap() {
+  applyView();
   try {
     await refreshDashboard();
     pollHandle = window.setInterval(() => {

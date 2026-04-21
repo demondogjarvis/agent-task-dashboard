@@ -7,159 +7,233 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
-      <header class="topbar">
+    <div class="layout-shell">
+      <aside class="sidebar">
         <div>
-          <p class="eyebrow">Jarvis control surface</p>
-          <h1>Agent Task Dashboard</h1>
-          <p class="subtitle">
-            A local-first orchestration board for approvals, assignments, live agent runs, and token visibility.
-          </p>
+          <p class="eyebrow">Jarvis</p>
+          <h1 class="sidebar-title">Agent Control</h1>
+          <p class="sidebar-copy">A clearer operator layout for task flow, specialists, and runtime visibility.</p>
         </div>
-        <div class="topbar-actions">
-          <button id="new-task-button" class="button primary">New task</button>
-          <button id="refresh-button" class="button ghost">Refresh live data</button>
-          <button id="reset-button" class="button ghost danger">Reset board</button>
+
+        <nav class="nav-menu">
+          <button class="nav-link" data-view-link="overview">Overview</button>
+          <button class="nav-link" data-view-link="tasks">Tasks</button>
+          <button class="nav-link" data-view-link="agents">Agents</button>
+          <button class="nav-link" data-view-link="runtime">Runtime</button>
+        </nav>
+
+        <div class="sidebar-card">
+          <p class="eyebrow">What changed</p>
+          <p>Navigation is now persistent, the board is separated into focused views, and agent visibility has its own page.</p>
         </div>
-      </header>
+      </aside>
 
-      <section class="hero-grid" id="stats-grid"></section>
-
-      <section class="control-grid">
-        <article class="panel composer-panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Task intake</p>
-              <h2>Define work before agents touch it</h2>
-            </div>
-            <span class="pill neutral">Approval gate enforced</span>
-          </div>
-          <form id="task-form" class="task-form">
-            <label>
-              Task title
-              <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
-            </label>
-            <label>
-              Priority
-              <select id="task-priority" name="priority">
-                <option value="critical">Critical</option>
-                <option value="high">High</option>
-                <option value="medium" selected>Medium</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-            <label>
-              Required skill
-              <select id="task-skill" name="skill">
-                <option value="frontend">Frontend</option>
-                <option value="backend">Backend</option>
-                <option value="ops">Ops</option>
-                <option value="qa">QA</option>
-                <option value="automation">Automation</option>
-                <option value="product">Product</option>
-              </select>
-            </label>
-            <label>
-              Owner / client stream
-              <input id="task-owner" name="owner" type="text" placeholder="Acme migration" />
-            </label>
-            <label class="wide">
-              Definition notes
-              <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
-            </label>
-            <div class="form-actions wide">
-              <button type="submit" class="button primary">Create task</button>
-              <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
-            </div>
-          </form>
-        </article>
-
-        <article class="panel approvals-panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Approvals</p>
-              <h2>Queue that agents cannot bypass</h2>
-            </div>
-            <span class="pill warning" id="approval-count-pill">0 waiting</span>
-          </div>
-          <div id="approval-list" class="approval-list"></div>
-        </article>
-      </section>
-
-      <section class="kanban-wrapper panel">
-        <div class="panel-header">
+      <main class="content-shell">
+        <header class="topbar">
           <div>
-            <p class="eyebrow">Execution lanes</p>
-            <h2>Kanban for staged agent work</h2>
+            <p class="eyebrow">Jarvis control surface</p>
+            <h2 id="page-title">Overview</h2>
+            <p id="page-description" class="subtitle"></p>
           </div>
-          <div class="legend">
-            <span><i class="dot critical"></i>Critical</span>
-            <span><i class="dot high"></i>High</span>
-            <span><i class="dot medium"></i>Medium</span>
-            <span><i class="dot low"></i>Low</span>
+          <div class="topbar-actions">
+            <button id="new-task-button" class="button primary">New task</button>
+            <button id="refresh-button" class="button ghost">Refresh live data</button>
+            <button id="reset-button" class="button ghost danger">Reset board</button>
           </div>
-        </div>
-        <div id="kanban-board" class="kanban-board"></div>
-      </section>
+        </header>
 
-      <section class="insights-grid">
-        <article class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Live agents</p>
-              <h2>Current run state</h2>
-            </div>
-            <span id="running-agents-pill" class="pill success">0 running</span>
-          </div>
-          <div id="agent-list" class="agent-list"></div>
-        </article>
+        <section class="hero-grid" id="stats-grid"></section>
 
-        <article class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Usage</p>
-              <h2>Live token footprint</h2>
-            </div>
-            <span class="pill neutral" id="token-total-pill">0 tokens</span>
-          </div>
-          <div id="usage-list" class="usage-list"></div>
-        </article>
+        <section class="page-view" data-view="overview">
+          <div class="overview-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Approvals</p>
+                  <h3>Waiting for human signoff</h3>
+                </div>
+                <span class="pill warning" id="overview-approval-pill">0 waiting</span>
+              </div>
+              <div id="overview-approval-list" class="approval-list"></div>
+            </article>
 
-        <article class="panel activity-panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Ops log</p>
-              <h2>Recent orchestration events</h2>
-            </div>
-            <span class="pill neutral">Live app events</span>
-          </div>
-          <div id="activity-list" class="activity-list"></div>
-        </article>
-      </section>
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Ready queue</p>
+                  <h3>Approved and ready for assignment</h3>
+                </div>
+                <span class="pill success" id="overview-ready-pill">0 ready</span>
+              </div>
+              <div id="overview-ready-list" class="approval-list"></div>
+            </article>
 
-      <section class="telemetry-grid">
-        <article class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Sessions</p>
-              <h2>OpenClaw session telemetry</h2>
-            </div>
-            <span class="pill neutral" id="session-count-pill">0 sessions</span>
-          </div>
-          <div id="session-list" class="activity-list"></div>
-        </article>
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Agent roster</p>
+                  <h3>Specialists available</h3>
+                </div>
+                <span class="pill neutral" id="overview-agent-pill">0 agents</span>
+              </div>
+              <div id="overview-agent-preview" class="agent-list compact-list"></div>
+            </article>
 
-        <article class="panel">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Background runtime</p>
-              <h2>Tracked tasks and process state</h2>
-            </div>
-            <span class="pill neutral" id="background-task-pill">0 tracked</span>
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Recent activity</p>
+                  <h3>Most recent system movement</h3>
+                </div>
+                <span class="pill neutral">Live</span>
+              </div>
+              <div id="overview-activity-list" class="activity-list"></div>
+            </article>
           </div>
-          <div id="background-task-list" class="activity-list"></div>
-        </article>
-      </section>
+        </section>
+
+        <section class="page-view" data-view="tasks">
+          <div class="control-grid">
+            <article class="panel composer-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Task intake</p>
+                  <h3>Define work before agents touch it</h3>
+                </div>
+                <span class="pill neutral">Approval gate enforced</span>
+              </div>
+              <form id="task-form" class="task-form">
+                <label>
+                  Task title
+                  <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
+                </label>
+                <label>
+                  Priority
+                  <select id="task-priority" name="priority">
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </label>
+                <label>
+                  Required skill
+                  <select id="task-skill" name="skill">
+                    <option value="frontend">Frontend</option>
+                    <option value="backend">Backend</option>
+                    <option value="ops">Ops</option>
+                    <option value="qa">QA</option>
+                    <option value="automation">Automation</option>
+                    <option value="product">Product</option>
+                  </select>
+                </label>
+                <label>
+                  Owner / client stream
+                  <input id="task-owner" name="owner" type="text" placeholder="Acme migration" />
+                </label>
+                <label class="wide">
+                  Definition notes
+                  <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
+                </label>
+                <div class="form-actions wide">
+                  <button type="submit" class="button primary">Create task</button>
+                  <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
+                </div>
+              </form>
+            </article>
+
+            <article class="panel approvals-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Approvals</p>
+                  <h3>Queue that agents cannot bypass</h3>
+                </div>
+                <span class="pill warning" id="approval-count-pill">0 waiting</span>
+              </div>
+              <div id="approval-list" class="approval-list"></div>
+            </article>
+          </div>
+
+          <section class="kanban-wrapper panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Execution lanes</p>
+                <h3>Kanban for staged agent work</h3>
+              </div>
+              <div class="legend">
+                <span><i class="dot critical"></i>Critical</span>
+                <span><i class="dot high"></i>High</span>
+                <span><i class="dot medium"></i>Medium</span>
+                <span><i class="dot low"></i>Low</span>
+              </div>
+            </div>
+            <div id="kanban-board" class="kanban-board"></div>
+          </section>
+        </section>
+
+        <section class="page-view" data-view="agents">
+          <div class="agents-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Existing agents</p>
+                  <h3>Who exists in the system</h3>
+                </div>
+                <span class="pill neutral" id="agent-count-pill">0 agents</span>
+              </div>
+              <div id="agent-list" class="agent-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Usage</p>
+                  <h3>Live token footprint</h3>
+                </div>
+                <span class="pill neutral" id="token-total-pill">0 tokens</span>
+              </div>
+              <div id="usage-list" class="usage-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="runtime">
+          <div class="runtime-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Sessions</p>
+                  <h3>OpenClaw session telemetry</h3>
+                </div>
+                <span class="pill neutral" id="session-count-pill">0 sessions</span>
+              </div>
+              <div id="session-list" class="activity-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Background runtime</p>
+                  <h3>Tracked tasks and process state</h3>
+                </div>
+                <span class="pill neutral" id="background-task-pill">0 tracked</span>
+              </div>
+              <div id="background-task-list" class="activity-list"></div>
+            </article>
+
+            <article class="panel runtime-activity-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Ops log</p>
+                  <h3>Recent orchestration events</h3>
+                </div>
+                <span class="pill neutral" id="running-agents-pill">0 running</span>
+              </div>
+              <div id="activity-list" class="activity-list"></div>
+            </article>
+          </div>
+        </section>
+      </main>
     </div>
 
     <template id="task-card-template">
