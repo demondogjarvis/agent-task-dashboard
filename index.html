@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis Agent Task Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Jarvis control surface</p>
+          <h1>Agent Task Dashboard</h1>
+          <p class="subtitle">
+            A local-first orchestration board for approvals, assignments, live agent runs, and token visibility.
+          </p>
+        </div>
+        <div class="topbar-actions">
+          <button id="new-task-button" class="button primary">New task</button>
+          <button id="auto-claim-button" class="button ghost">Auto-claim: Off</button>
+          <button id="reset-button" class="button ghost danger">Reset demo</button>
+        </div>
+      </header>
+
+      <section class="hero-grid" id="stats-grid"></section>
+
+      <section class="control-grid">
+        <article class="panel composer-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Task intake</p>
+              <h2>Define work before agents touch it</h2>
+            </div>
+            <span class="pill neutral">Approval gate enforced</span>
+          </div>
+          <form id="task-form" class="task-form">
+            <label>
+              Task title
+              <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
+            </label>
+            <label>
+              Priority
+              <select id="task-priority" name="priority">
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium" selected>Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label>
+              Required skill
+              <select id="task-skill" name="skill">
+                <option value="frontend">Frontend</option>
+                <option value="backend">Backend</option>
+                <option value="ops">Ops</option>
+                <option value="qa">QA</option>
+                <option value="automation">Automation</option>
+                <option value="product">Product</option>
+              </select>
+            </label>
+            <label>
+              Owner / client stream
+              <input id="task-owner" name="owner" type="text" placeholder="Acme migration" />
+            </label>
+            <label class="wide">
+              Definition notes
+              <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
+            </label>
+            <div class="form-actions wide">
+              <button type="submit" class="button primary">Create task</button>
+              <button type="button" id="seed-ready-button" class="button ghost">Create approved sample</button>
+            </div>
+          </form>
+        </article>
+
+        <article class="panel approvals-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Approvals</p>
+              <h2>Queue that agents cannot bypass</h2>
+            </div>
+            <span class="pill warning" id="approval-count-pill">0 waiting</span>
+          </div>
+          <div id="approval-list" class="approval-list"></div>
+        </article>
+      </section>
+
+      <section class="kanban-wrapper panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Execution lanes</p>
+            <h2>Kanban for staged agent work</h2>
+          </div>
+          <div class="legend">
+            <span><i class="dot critical"></i>Critical</span>
+            <span><i class="dot high"></i>High</span>
+            <span><i class="dot medium"></i>Medium</span>
+            <span><i class="dot low"></i>Low</span>
+          </div>
+        </div>
+        <div id="kanban-board" class="kanban-board"></div>
+      </section>
+
+      <section class="insights-grid">
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Live agents</p>
+              <h2>Current run state</h2>
+            </div>
+            <span id="running-agents-pill" class="pill success">0 running</span>
+          </div>
+          <div id="agent-list" class="agent-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Usage</p>
+              <h2>Today’s token burn</h2>
+            </div>
+            <span class="pill neutral" id="token-total-pill">0 tokens</span>
+          </div>
+          <div id="usage-list" class="usage-list"></div>
+        </article>
+
+        <article class="panel activity-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Ops log</p>
+              <h2>Recent orchestration events</h2>
+            </div>
+            <span class="pill neutral">Live demo feed</span>
+          </div>
+          <div id="activity-list" class="activity-list"></div>
+        </article>
+      </section>
+    </div>
+
+    <template id="task-card-template">
+      <article class="task-card">
+        <div class="task-card-header">
+          <span class="priority-dot"></span>
+          <span class="task-priority-label"></span>
+          <span class="task-owner"></span>
+        </div>
+        <h3 class="task-title"></h3>
+        <p class="task-notes"></p>
+        <div class="task-meta">
+          <span class="tag skill-tag"></span>
+          <span class="tag assignee-tag"></span>
+        </div>
+        <div class="task-actions"></div>
+      </article>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
