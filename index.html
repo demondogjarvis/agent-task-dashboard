@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis Agent Task Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="layout-shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Jarvis</p>
+          <h1 class="sidebar-title">Agent Control</h1>
+          <p class="sidebar-copy">A clearer operator layout for task flow, specialists, and runtime visibility.</p>
+        </div>
+
+        <nav class="nav-menu">
+          <button class="nav-link" data-view-link="overview">Overview</button>
+          <button class="nav-link" data-view-link="tasks">Tasks</button>
+          <button class="nav-link" data-view-link="agents">Agents</button>
+          <button class="nav-link" data-view-link="runtime">Runtime</button>
+          <button class="nav-link" data-view-link="history">History</button>
+        </nav>
+
+        <div class="sidebar-card">
+          <p class="eyebrow">What changed</p>
+          <p>Navigation is now persistent, the board is separated into focused views, and agent visibility has its own page.</p>
+        </div>
+      </aside>
+
+      <main class="content-shell">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Jarvis control surface</p>
+            <h2 id="page-title">Overview</h2>
+            <p id="page-description" class="subtitle"></p>
+          </div>
+          <div class="topbar-actions">
+            <button id="new-task-button" class="button primary">New task</button>
+            <button id="refresh-button" class="button ghost">Refresh live data</button>
+          </div>
+        </header>
+
+        <section class="hero-grid" id="stats-grid"></section>
+
+        <section class="page-view" data-view="overview">
+          <div class="overview-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Approvals</p>
+                  <h3>Waiting for human signoff</h3>
+                </div>
+                <span class="pill warning" id="overview-approval-pill">0 waiting</span>
+              </div>
+              <div id="overview-approval-list" class="approval-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Ready queue</p>
+                  <h3>Approved and ready for assignment</h3>
+                </div>
+                <span class="pill success" id="overview-ready-pill">0 ready</span>
+              </div>
+              <div id="overview-ready-list" class="approval-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Agent roster</p>
+                  <h3>Specialists available</h3>
+                </div>
+                <span class="pill neutral" id="overview-agent-pill">0 agents</span>
+              </div>
+              <div id="overview-agent-preview" class="agent-list compact-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Recent activity</p>
+                  <h3>Most recent system movement</h3>
+                </div>
+                <span class="pill neutral">Live</span>
+              </div>
+              <div id="overview-activity-list" class="activity-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="tasks">
+          <div class="control-grid">
+            <article class="panel composer-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Task intake</p>
+                  <h3>Define work before agents touch it</h3>
+                </div>
+                <span class="pill neutral">Approval gate enforced</span>
+              </div>
+              <form id="task-form" class="task-form">
+                <label>
+                  Task title
+                  <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
+                </label>
+                <label>
+                  Priority
+                  <select id="task-priority" name="priority">
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </label>
+                <label>
+                  Preferred agent
+                  <select id="task-agent" name="agentId"></select>
+                </label>
+                <label>
+                  Project
+                  <select id="task-owner" name="owner"></select>
+                </label>
+                <label class="wide">
+                  Definition notes
+                  <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
+                </label>
+                <div class="form-actions wide">
+                  <button type="submit" class="button primary">Create task</button>
+                  <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
+                </div>
+              </form>
+            </article>
+
+            <article class="panel approvals-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Approvals</p>
+                  <h3>Queue that agents cannot bypass</h3>
+                </div>
+                <span class="pill warning" id="approval-count-pill">0 waiting</span>
+              </div>
+              <div id="approval-list" class="approval-list"></div>
+            </article>
+          </div>
+
+          <section class="kanban-wrapper panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Execution lanes</p>
+                <h3>Kanban for staged agent work</h3>
+              </div>
+              <div class="legend">
+                <span><i class="dot critical"></i>Critical</span>
+                <span><i class="dot high"></i>High</span>
+                <span><i class="dot medium"></i>Medium</span>
+                <span><i class="dot low"></i>Low</span>
+              </div>
+            </div>
+            <div id="kanban-board" class="kanban-board"></div>
+          </section>
+        </section>
+
+        <section class="page-view" data-view="agents">
+          <div class="agents-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Existing agents</p>
+                  <h3>Who exists in the system</h3>
+                </div>
+                <span class="pill neutral" id="agent-count-pill">0 agents</span>
+              </div>
+              <div id="agent-list" class="agent-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Usage</p>
+                  <h3>Live token footprint</h3>
+                </div>
+                <span class="pill neutral" id="token-total-pill">0 tokens</span>
+              </div>
+              <div id="usage-list" class="usage-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="runtime">
+          <div class="runtime-grid">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Sessions</p>
+                  <h3>OpenClaw session telemetry</h3>
+                </div>
+                <span class="pill neutral" id="session-count-pill">0 sessions</span>
+              </div>
+              <div id="session-list" class="activity-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Background runtime</p>
+                  <h3>Tracked tasks and process state</h3>
+                </div>
+                <span class="pill neutral" id="background-task-pill">0 tracked</span>
+              </div>
+              <div id="background-task-list" class="activity-list"></div>
+            </article>
+
+            <article class="panel runtime-activity-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Ops log</p>
+                  <h3>Recent orchestration events</h3>
+                </div>
+                <span class="pill neutral" id="running-agents-pill">0 running</span>
+              </div>
+              <div id="activity-list" class="activity-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="history">
+          <div class="history-layout">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Completed work</p>
+                  <h3>Done task history</h3>
+                </div>
+                <span class="pill success" id="history-count-pill">0 completed</span>
+              </div>
+              <p id="history-summary" class="subtitle"></p>
+              <div id="history-list" class="history-list"></div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <aside id="task-detail-drawer" class="task-detail-drawer" aria-hidden="true">
+      <div id="task-detail-backdrop" class="task-detail-backdrop"></div>
+      <section class="task-detail-panel" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+        <div class="task-detail-header">
+          <div>
+            <p class="eyebrow">Task details</p>
+            <h3 id="task-detail-title">Task title</h3>
+          </div>
+          <div class="task-detail-header-actions">
+            <button type="button" id="task-detail-edit-toggle" class="button ghost">Edit</button>
+            <button type="button" id="task-detail-close" class="button ghost">Close</button>
+          </div>
+        </div>
+
+        <div id="task-detail-summary" class="task-detail-summary">
+          <div id="task-detail-tags" class="task-detail-tags"></div>
+          <p id="task-detail-notes" class="task-detail-copy"></p>
+        </div>
+
+        <section id="task-detail-edit-section" class="task-detail-section task-detail-edit-section" hidden>
+          <p class="eyebrow">Edit task</p>
+          <form id="task-edit-form" class="task-form task-detail-form">
+            <label>
+              Task title
+              <input id="task-edit-title" name="title" type="text" required />
+            </label>
+            <label>
+              Priority
+              <select id="task-edit-priority" name="priority">
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label>
+              Preferred agent
+              <select id="task-edit-agent" name="agentId"></select>
+            </label>
+            <label>
+              Project
+              <select id="task-edit-owner" name="owner"></select>
+            </label>
+            <label class="wide">
+              Definition notes
+              <textarea id="task-edit-notes" name="notes" rows="4"></textarea>
+            </label>
+            <div class="form-actions wide">
+              <button type="submit" class="button primary">Save changes</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="task-detail-section">
+          <div class="task-comments-header">
+            <p class="eyebrow">Comments</p>
+            <span id="task-comment-count" class="pill neutral">0 comments</span>
+          </div>
+          <div id="task-comment-list" class="history-list"></div>
+          <form id="task-comment-form" class="task-detail-comment-form">
+            <label class="modal-label">
+              Author
+              <input id="task-comment-author" name="author" type="text" placeholder="Bjorn, Jarvis, Atlas..." />
+            </label>
+            <label class="modal-label">
+              Comment
+              <textarea id="task-comment-body" name="comment" rows="3" placeholder="Add clarification, questions, or implementation notes"></textarea>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="button primary">Add comment</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="task-detail-section">
+          <p class="eyebrow">Latest run</p>
+          <p id="task-detail-run-status" class="task-detail-copy"></p>
+          <p id="task-detail-output" class="task-run-note"></p>
+          <p id="task-detail-error" class="task-run-note error-note"></p>
+        </section>
+
+        <section class="task-detail-section">
+          <p class="eyebrow">Task actions</p>
+          <div id="task-detail-actions" class="task-actions"></div>
+        </section>
+      </section>
+    </aside>
+
+    <dialog id="reassign-dialog" class="modal-dialog">
+      <form method="dialog" class="modal-card">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Reassign task</p>
+            <h3 id="reassign-task-title">Select a new agent</h3>
+          </div>
+        </div>
+
+        <label class="modal-label">
+          Agent
+          <select id="reassign-agent-select"></select>
+        </label>
+
+        <div class="topbar-actions">
+          <button type="button" id="reassign-cancel-button" class="button ghost">Cancel</button>
+          <button type="button" id="reassign-confirm-button" class="button primary">Reassign</button>
+        </div>
+      </form>
+    </dialog>
+
+    <template id="task-card-template">
+      <article class="task-card">
+        <div class="task-card-header">
+          <span class="priority-dot"></span>
+          <span class="task-priority-label"></span>
+          <span class="task-owner"></span>
+        </div>
+        <h3 class="task-title"></h3>
+        <p class="task-notes"></p>
+        <div class="task-meta">
+          <span class="tag skill-tag"></span>
+          <span class="tag assignee-tag"></span>
+        </div>
+        <div class="task-actions"></div>
+      </article>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
