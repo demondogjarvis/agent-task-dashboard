@@ -729,7 +729,12 @@ function renderKanban() {
         ? `${agent.emoji} ${agent.name}${task.runStatus === 'running' ? ' running' : ''}`
         : 'Unassigned';
       node.querySelector('.task-actions').innerHTML = buildTaskActions(task, { compact: true });
-      notesNode.remove();
+      if (task.liveStatus?.message) {
+        notesNode.textContent = `${task.liveStatus.message} Started ${relativeTime(task.liveStatus.startedAt)}.`;
+        notesNode.classList.add('live-task-note');
+      } else {
+        notesNode.remove();
+      }
 
       if (task.preferredAgentId) {
         const preferredAgent = findAgent(task.preferredAgentId);
@@ -893,7 +898,7 @@ function renderBackgroundTasks() {
     const agent = findAgent(run.agentId);
     return {
       title: task?.title || run.taskId,
-      detail: `${agent ? `${agent.emoji} ${agent.name}` : run.agentId} is running it, pid ${run.pid}.`,
+      detail: run.summary || `${agent ? `${agent.emoji} ${agent.name}` : run.agentId} is running it, pid ${run.pid}.`,
       updatedAt: run.startedAt,
       kind: 'Active process',
     };

@@ -759,6 +759,12 @@ textarea:focus {
   font-size: 0.96rem;
 }
 
+.live-task-note {
+  margin: -2px 0 0;
+  font-size: 0.88rem;
+  color: var(--text-soft);
+}
+
 .task-card-header,
 .task-meta {
   align-items: center;

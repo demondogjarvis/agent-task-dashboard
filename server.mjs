@@ -1310,6 +1310,7 @@ async function buildDashboardPayload() {
   });
 
   const totalSessionTokens = sessions.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
+  const activeRunByTaskId = new Map(Array.from(activeRuns.values()).map((run) => [run.taskId, run]));
 
   return {
     generatedAt: Date.now(),
@@ -1318,7 +1319,20 @@ async function buildDashboardPayload() {
     },
     projects: [...state.projects].sort((a, b) => a.name.localeCompare(b.name)),
     lanes,
-    tasks: [...state.tasks].sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0)),
+    tasks: [...state.tasks]
+      .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0))
+      .map((task) => {
+        const activeRun = activeRunByTaskId.get(task.id) || null;
+        return {
+          ...task,
+          liveStatus: activeRun
+            ? {
+                message: buildLiveRunStatus(task, activeRun),
+                startedAt: activeRun.startedAt,
+              }
+            : null,
+        };
+      }),
     activity: state.activity.slice(0, 20),
     agents: mergedAgents,
     approvals: state.tasks.filter((task) => task.lane === 'approval'),
@@ -1328,6 +1342,7 @@ async function buildDashboardPayload() {
       agentId: run.agentId,
       pid: run.pid,
       startedAt: run.startedAt,
+      summary: buildLiveRunStatus(state.tasks.find((task) => task.id === run.taskId) || null, run),
     })),
     runs: runLogger.getRecentRuns(80),
     systemHistory: {
@@ -1627,6 +1642,45 @@ function sanitizeRunNote(raw) {
     .trim();
 
   return filtered || null;
+}
+
+function extractLatestProgressLine(raw) {
+  const cleaned = sanitizeRunNote(raw);
+  if (!cleaned) {
+    return null;
+  }
+
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith('{') && !line.startsWith('Summary'));
+
+  return lines.at(-1) || null;
+}
+
+function buildLiveRunStatus(task, run) {
+  if (!run) {
+    return null;
+  }
+
+  const agentName = agentCatalog.find((agent) => agent.id === run.agentId)?.name || 'Agent';
+  const progressLine = extractLatestProgressLine(run.stderr) || extractLatestProgressLine(run.stdout);
+  if (progressLine) {
+    return progressLine.slice(0, 180);
+  }
+
+  const ageMs = Math.max(0, Date.now() - Number(run.startedAt || Date.now()));
+  if (ageMs < 15000) {
+    return `${agentName} claimed the task and is preparing the workspace.`;
+  }
+  if (ageMs < 60000) {
+    return `${agentName} is reviewing the task and repo context.`;
+  }
+  if (ageMs < 180000) {
+    return `${agentName} is making changes in the background.`;
+  }
+  return `${agentName} is still working in the background.`;
 }
 
 function extractSummarySection(output) {
