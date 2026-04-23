@@ -41,6 +41,159 @@ body.drawer-open {
   overflow: hidden;
 }
 
+body[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #120d18;
+  --panel: rgba(31, 23, 39, 0.9);
+  --panel-strong: rgba(36, 27, 45, 0.97);
+  --surface: rgba(45, 35, 56, 0.84);
+  --surface-soft: rgba(40, 30, 49, 0.92);
+  --panel-border: rgba(232, 210, 239, 0.12);
+  --muted: #c2b3cf;
+  --text: #f6eff8;
+  --text-soft: #e5d8ee;
+  --accent: #ddb4ea;
+  --accent-strong: #f4d4fb;
+  --accent-soft: rgba(221, 180, 234, 0.16);
+  --success: #9ce1bf;
+  --warning: #ffd08a;
+  --danger: #ff9fb6;
+  --critical: #ff9ab9;
+  --high: #ffc18d;
+  --medium: #caa8ff;
+  --low: #95d3ff;
+  --shadow: 0 18px 48px rgba(6, 4, 10, 0.42);
+  background:
+    radial-gradient(circle at top left, rgba(145, 93, 170, 0.18), transparent 34%),
+    radial-gradient(circle at top right, rgba(89, 48, 104, 0.14), transparent 30%),
+    linear-gradient(180deg, #120d18 0%, #17111e 45%, #0f0b13 100%);
+}
+
+body[data-theme="dark"] .nav-link,
+body[data-theme="dark"] .sidebar-card,
+body[data-theme="dark"] .button,
+body[data-theme="dark"] .stat-card,
+body[data-theme="dark"] .pill,
+body[data-theme="dark"] .tag,
+body[data-theme="dark"] .task-priority-label,
+body[data-theme="dark"] .task-owner,
+body[data-theme="dark"] .status-pill,
+body[data-theme="dark"] input,
+body[data-theme="dark"] select,
+body[data-theme="dark"] textarea,
+body[data-theme="dark"] .approval-item,
+body[data-theme="dark"] .agent-card,
+body[data-theme="dark"] .usage-card,
+body[data-theme="dark"] .activity-item,
+body[data-theme="dark"] .history-card,
+body[data-theme="dark"] .kanban-column,
+body[data-theme="dark"] .task-card,
+body[data-theme="dark"] .modal-card {
+  box-shadow: var(--shadow);
+}
+
+body[data-theme="dark"] .nav-link {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(232, 210, 239, 0.12);
+  color: var(--text-soft);
+}
+
+body[data-theme="dark"] .nav-link:hover,
+body[data-theme="dark"] .nav-link.active {
+  background: linear-gradient(135deg, rgba(221, 180, 234, 0.2), rgba(145, 93, 170, 0.28));
+  border-color: rgba(232, 210, 239, 0.24);
+  color: var(--accent);
+}
+
+body[data-theme="dark"] .sidebar-card {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(232, 210, 239, 0.12);
+}
+
+body[data-theme="dark"] .button {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(232, 210, 239, 0.1);
+  color: var(--text);
+}
+
+body[data-theme="dark"] .button.ghost {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+body[data-theme="dark"] .button.primary {
+  color: #1a1220;
+}
+
+body[data-theme="dark"] .stat-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  border-color: rgba(232, 210, 239, 0.08);
+}
+
+body[data-theme="dark"] .pill,
+body[data-theme="dark"] .tag,
+body[data-theme="dark"] .task-priority-label,
+body[data-theme="dark"] .task-owner,
+body[data-theme="dark"] .status-pill {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(232, 210, 239, 0.12);
+  color: var(--text-soft);
+}
+
+body[data-theme="dark"] input,
+body[data-theme="dark"] select,
+body[data-theme="dark"] textarea {
+  background: rgba(20, 15, 26, 0.92);
+  border-color: rgba(232, 210, 239, 0.12);
+  color: var(--text);
+}
+
+body[data-theme="dark"] .approval-item,
+body[data-theme="dark"] .agent-card,
+body[data-theme="dark"] .usage-card,
+body[data-theme="dark"] .activity-item,
+body[data-theme="dark"] .history-card {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(232, 210, 239, 0.08);
+}
+
+body[data-theme="dark"] .kanban-column {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(232, 210, 239, 0.08);
+}
+
+body[data-theme="dark"] .task-card {
+  background: linear-gradient(180deg, rgba(40, 30, 50, 0.96), rgba(30, 22, 38, 0.98));
+  border-color: rgba(232, 210, 239, 0.1);
+}
+
+body[data-theme="dark"] .task-run-note,
+body[data-theme="dark"] .sidebar-card p,
+body[data-theme="dark"] .approval-item p,
+body[data-theme="dark"] .agent-card p,
+body[data-theme="dark"] .usage-card p,
+body[data-theme="dark"] .activity-item p,
+body[data-theme="dark"] .task-card p {
+  color: var(--muted);
+}
+
+body[data-theme="dark"] .task-detail-backdrop {
+  background: rgba(11, 8, 15, 0.72);
+}
+
+body[data-theme="dark"] .task-detail-panel {
+  background: var(--panel-strong);
+  border-left-color: rgba(232, 210, 239, 0.1);
+}
+
+body[data-theme="dark"] .column-footer {
+  border-top-color: rgba(232, 210, 239, 0.1);
+}
+
+body[data-theme="dark"] .column-link,
+body[data-theme="dark"] .task-detail-copy {
+  color: var(--text-soft);
+}
+
 button,
 input,
 select,
@@ -118,6 +271,10 @@ p {
   border-color: rgba(89, 48, 104, 0.24);
   color: var(--accent);
   transform: translateY(-1px);
+}
+
+.theme-toggle {
+  margin-top: 4px;
 }
 
 .sidebar-card {

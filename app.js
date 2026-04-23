@@ -32,6 +32,10 @@ const viewMeta = {
     title: 'History',
     description: 'Browse every completed task while the Done column stays focused on recent completions.',
   },
+  'system-history': {
+    title: 'System History',
+    description: 'Review broader OpenClaw task history and session activity outside the dashboard-owned run log.',
+  },
 };
 
 let dashboard = null;
@@ -60,12 +64,21 @@ const sessionList = document.getElementById('session-list');
 const backgroundTaskList = document.getElementById('background-task-list');
 const historyList = document.getElementById('history-list');
 const historySummary = document.getElementById('history-summary');
+const runList = document.getElementById('run-list');
+const runSummary = document.getElementById('run-summary');
+const systemTaskHistoryList = document.getElementById('system-task-history-list');
+const systemTaskHistorySummary = document.getElementById('system-task-history-summary');
+const systemTaskHistoryCountPill = document.getElementById('system-task-history-count-pill');
+const systemSessionHistoryList = document.getElementById('system-session-history-list');
+const systemSessionHistorySummary = document.getElementById('system-session-history-summary');
+const systemSessionHistoryCountPill = document.getElementById('system-session-history-count-pill');
 const taskForm = document.getElementById('task-form');
 const tokenTotalPill = document.getElementById('token-total-pill');
 const runningAgentsPill = document.getElementById('running-agents-pill');
 const sessionCountPill = document.getElementById('session-count-pill');
 const backgroundTaskPill = document.getElementById('background-task-pill');
 const historyCountPill = document.getElementById('history-count-pill');
+const runCountPill = document.getElementById('run-count-pill');
 const agentCountPill = document.getElementById('agent-count-pill');
 const seedReadyButton = document.getElementById('seed-ready-button');
 const newTaskButton = document.getElementById('new-task-button');
@@ -97,6 +110,8 @@ const taskCommentBody = document.getElementById('task-comment-body');
 const taskDetailRunStatus = document.getElementById('task-detail-run-status');
 const taskDetailOutput = document.getElementById('task-detail-output');
 const taskDetailError = document.getElementById('task-detail-error');
+const taskRunHistoryCount = document.getElementById('task-run-history-count');
+const taskRunHistory = document.getElementById('task-run-history');
 const taskDetailActions = document.getElementById('task-detail-actions');
 const reassignDialog = document.getElementById('reassign-dialog');
 const reassignTaskTitle = document.getElementById('reassign-task-title');
@@ -104,6 +119,8 @@ const reassignAgentSelect = document.getElementById('reassign-agent-select');
 const reassignConfirmButton = document.getElementById('reassign-confirm-button');
 const reassignCancelButton = document.getElementById('reassign-cancel-button');
 const cardTemplate = document.getElementById('task-card-template');
+const THEME_STORAGE_KEY = 'jarvis-theme';
+const themeToggleButton = document.getElementById('theme-toggle-button');
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -123,6 +140,42 @@ async function api(path, options = {}) {
   }
 
   return data;
+}
+
+function getStoredTheme() {
+  try {
+    const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return theme === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function applyTheme(theme, persist = true) {
+  const resolved = theme === 'dark' ? 'dark' : 'light';
+  document.body.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+
+  if (themeToggleButton) {
+    themeToggleButton.textContent = resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    themeToggleButton.setAttribute('aria-pressed', resolved === 'dark' ? 'true' : 'false');
+  }
+
+  if (persist) {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, resolved);
+    } catch {
+      // ignore storage failures
+    }
+  }
+}
+
+function initTheme() {
+  applyTheme(getStoredTheme(), false);
+}
+
+function toggleTheme() {
+  applyTheme(document.body.dataset.theme === 'dark' ? 'light' : 'dark');
 }
 
 function getCurrentView() {
@@ -297,6 +350,110 @@ function getDoneColumnMessage(doneTasks, visibleDoneTasks) {
   return `Showing the latest ${visibleDoneTasks.length} completed tasks.`;
 }
 
+function formatDateTime(timestamp) {
+  if (!timestamp) return 'n/a';
+  return new Date(timestamp).toLocaleString();
+}
+
+function formatDuration(durationMs) {
+  if (!durationMs) return 'n/a';
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function getStatusClass(status) {
+  return ['succeeded', 'success', 'done', 'completed'].includes(status)
+    ? 'success'
+    : ['failed', 'timed_out', 'cancelled', 'lost'].includes(status)
+      ? 'warning'
+      : 'neutral';
+}
+
+function buildRunCard(run, { compact = false } = {}) {
+  const summary = truncate(run.summaryText || run.outputText || run.errorText || '', compact ? 140 : 260);
+  const details = [
+    run.agentName || run.agentId,
+    run.model || 'model pending',
+    run.usage?.total ? `${run.usage.total.toLocaleString()} tokens` : 'usage pending',
+    run.durationMs ? formatDuration(run.durationMs) : run.status === 'running' ? 'in progress' : 'duration n/a',
+  ];
+
+  return `
+    <article class="history-card">
+      <div class="history-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(formatDateTime(run.startedAt))}</p>
+          <h3>${escapeHtml(run.taskTitle)}</h3>
+        </div>
+        <span class="pill ${getStatusClass(run.status)}">${escapeHtml(run.status)}</span>
+      </div>
+      <div class="task-meta">
+        <span class="tag">${escapeHtml(run.owner || 'No stream')}</span>
+        <span class="tag">${escapeHtml(skillLabels[run.skill] || run.skill || 'Unknown skill')}</span>
+        ${details.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')}
+      </div>
+      ${summary ? `<p class="task-run-note">${escapeHtml(summary)}</p>` : ''}
+      ${run.failureDetails || run.errorText ? `<p class="task-run-note error-note">${escapeHtml(truncate(run.failureDetails || run.errorText, compact ? 180 : 320))}</p>` : ''}
+    </article>
+  `;
+}
+
+function buildSystemTaskCard(task) {
+  const summary = truncate(task.summary || '', 320);
+  const details = [
+    task.runtime || 'unknown runtime',
+    task.agentId || 'agent n/a',
+    task.sessionKey || 'session n/a',
+    task.runId || 'run id n/a',
+  ];
+
+  return `
+    <article class="history-card">
+      <div class="history-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(formatDateTime(task.updatedAt || task.startedAt || task.createdAt))}</p>
+          <h3>${escapeHtml(task.label)}</h3>
+        </div>
+        <span class="pill ${getStatusClass(task.status)}">${escapeHtml(task.status)}</span>
+      </div>
+      <div class="task-meta">
+        ${details.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')}
+      </div>
+      ${summary ? `<p class="task-run-note">${escapeHtml(summary)}</p>` : ''}
+    </article>
+  `;
+}
+
+function buildSystemSessionCard(session) {
+  const detailTags = [
+    session.agentId || 'agent n/a',
+    session.kind || 'kind n/a',
+    session.model || 'model unknown',
+    `${(session.totalTokens || 0).toLocaleString()} tokens`,
+    session.thinkingLevel ? `thinking ${session.thinkingLevel}` : null,
+    session.systemSent ? 'system-sent' : null,
+    session.abortedLastRun ? 'last run aborted' : null,
+  ].filter(Boolean);
+
+  return `
+    <article class="history-card">
+      <div class="history-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(formatDateTime(session.updatedAt))}</p>
+          <h3>${escapeHtml(session.key || session.sessionId || 'Session')}</h3>
+        </div>
+        <span class="pill neutral">session</span>
+      </div>
+      <div class="task-meta">
+        ${detailTags.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')}
+      </div>
+    </article>
+  `;
+}
+
 function renderStats() {
   const { metrics, openclaw } = dashboard;
   const statCards = [
@@ -343,6 +500,7 @@ function renderStats() {
   sessionCountPill.textContent = `${openclaw.sessions.length} sessions`;
   backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length} tracked`;
   historyCountPill.textContent = `${metrics.doneCount} completed`;
+  runCountPill.textContent = `${dashboard.runs.length} runs`;
   agentCountPill.textContent = `${dashboard.agents.length} agents`;
 }
 
@@ -741,6 +899,52 @@ function renderHistory() {
     : '<div class="empty-state">No completed task history yet.</div>';
 }
 
+function renderRuns() {
+  const runs = dashboard.runs || [];
+  const failedCount = runs.filter((run) => run.status === 'failed').length;
+
+  runSummary.textContent = runs.length
+    ? `${runs.length} durable run record${runs.length === 1 ? '' : 's'} loaded from SQLite, with ${failedCount} failure${failedCount === 1 ? '' : 's'} visible.`
+    : 'Run records will appear here once agents start executing tasks.';
+
+  runList.innerHTML = runs.length
+    ? runs.map((run) => buildRunCard(run)).join('')
+    : '<div class="empty-state">No durable run history yet.</div>';
+}
+
+function renderSystemHistory() {
+  const systemTasks = dashboard.systemHistory?.tasks || [];
+  const systemSessions = dashboard.systemHistory?.sessions || [];
+  const terminalTasks = systemTasks.filter((task) => ['succeeded', 'failed', 'timed_out', 'cancelled', 'lost'].includes(task.status));
+
+  systemTaskHistoryCountPill.textContent = `${systemTasks.length} task${systemTasks.length === 1 ? '' : 's'}`;
+  systemSessionHistoryCountPill.textContent = `${systemSessions.length} session${systemSessions.length === 1 ? '' : 's'}`;
+
+  systemTaskHistorySummary.textContent = systemTasks.length
+    ? `${systemTasks.length} tracked OpenClaw task${systemTasks.length === 1 ? '' : 's'}, with ${terminalTasks.length} finished and visible here newest first.`
+    : 'OpenClaw background task history will appear here when the system has durable task runs to show.';
+
+  systemSessionHistorySummary.textContent = systemSessions.length
+    ? `${systemSessions.length} known session${systemSessions.length === 1 ? '' : 's'} across agents, sorted by most recent activity.`
+    : 'Session activity will appear here once OpenClaw has visible session state.';
+
+  systemTaskHistoryList.innerHTML = systemTasks.length
+    ? systemTasks.map((task) => buildSystemTaskCard(task)).join('')
+    : '<div class="empty-state">No system-wide OpenClaw task history yet.</div>';
+
+  systemSessionHistoryList.innerHTML = systemSessions.length
+    ? systemSessions.map((session) => buildSystemSessionCard(session)).join('')
+    : '<div class="empty-state">No system-wide session activity yet.</div>';
+}
+
+function renderTaskRunHistory(task) {
+  const runs = (dashboard.runs || []).filter((run) => run.taskId === task.id);
+  taskRunHistoryCount.textContent = `${runs.length} run${runs.length === 1 ? '' : 's'}`;
+  taskRunHistory.innerHTML = runs.length
+    ? runs.slice(0, 6).map((run) => buildRunCard(run, { compact: true })).join('')
+    : '<div class="empty-state">No durable run history recorded for this task yet.</div>';
+}
+
 function syncTaskDetailForms(task) {
   if (taskDetailDraftTaskId === task.id) {
     return;
@@ -837,6 +1041,7 @@ function renderTaskDetail() {
 
   syncTaskDetailForms(task);
   renderTaskComments(task);
+  renderTaskRunHistory(task);
 
   taskDetailDrawer.classList.add('open');
   taskDetailDrawer.setAttribute('aria-hidden', 'false');
@@ -854,7 +1059,9 @@ function renderAll() {
   renderActivity();
   renderSessions();
   renderBackgroundTasks();
+  renderRuns();
   renderHistory();
+  renderSystemHistory();
   renderTaskDetail();
   applyView();
 }
@@ -1020,6 +1227,8 @@ taskDetailEditToggle.addEventListener('click', () => {
   renderTaskDetail();
 });
 
+themeToggleButton?.addEventListener('click', toggleTheme);
+
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && selectedTaskId) {
     closeTaskDetail();
@@ -1052,6 +1261,8 @@ newTaskButton.addEventListener('click', () => {
 });
 
 window.addEventListener('hashchange', applyView);
+
+initTheme();
 
 async function bootstrap() {
   applyView();

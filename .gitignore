@@ -1,3 +1,7 @@
 agent-workspaces/
+logs/
 data/state.json
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 *.log

@@ -3,13 +3,16 @@ import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRunLogger } from './db.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 4311);
 const HOST = process.env.HOST || '127.0.0.1';
+const OPENCLAW_BIN = process.env.OPENCLAW_BIN || 'openclaw';
 const DATA_DIR = path.join(__dirname, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
+const RUNS_DB_PATH = path.join(DATA_DIR, 'run-history.sqlite');
 const ROOT_WORKSPACE = path.resolve(__dirname, '..');
 const AGENT_WORKSPACES_DIR = path.join(__dirname, 'agent-workspaces');
 
@@ -92,6 +95,7 @@ const mimeTypes = {
 
 const activeRuns = new Map();
 let state = await loadOrCreateState();
+const runLogger = createRunLogger({ dbPath: RUNS_DB_PATH });
 let telemetryCache = {
   configuredAgents: [],
   sessions: [],
@@ -135,6 +139,34 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/dashboard') {
     const dashboard = await buildDashboardPayload();
     sendJson(res, 200, dashboard);
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/runs') {
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') || 80)));
+    sendJson(res, 200, { runs: runLogger.getRecentRuns(limit) });
+    return;
+  }
+
+  const runRoute = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
+  if (req.method === 'GET' && runRoute) {
+    const run = runLogger.getRun(runRoute[1], { logLimit: 800 });
+    if (!run) {
+      sendJson(res, 404, { error: 'not_found', message: 'Run not found.' });
+      return;
+    }
+    sendJson(res, 200, { run });
+    return;
+  }
+
+  const taskRunsRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/runs$/);
+  if (req.method === 'GET' && taskRunsRoute) {
+    const task = state.tasks.find((item) => item.id === taskRunsRoute[1]);
+    if (!task) {
+      sendJson(res, 404, { error: 'not_found', message: 'Task not found.' });
+      return;
+    }
+    sendJson(res, 200, { runs: runLogger.getTaskRuns(task.id, 20) });
     return;
   }
 
@@ -396,30 +428,62 @@ function moveTask(task, direction) {
 }
 
 async function launchTaskRun(task, agent) {
+  const prompt = buildTaskPrompt(task, agent);
   const args = [
     'agent',
     '--agent',
     agent.id,
     '--message',
-    buildTaskPrompt(task, agent),
+    prompt,
     '--thinking',
     'off',
     '--json',
   ];
 
-  const child = spawn('openclaw', args, {
+  const child = spawn(OPENCLAW_BIN, args, {
     cwd: ROOT_WORKSPACE,
     env: process.env,
   });
 
   const run = {
+    id: nextId('run'),
     taskId: task.id,
+    taskTitle: task.title,
     agentId: agent.id,
+    agentName: agent.name,
     pid: child.pid,
     startedAt: Date.now(),
     stdout: '',
     stderr: '',
+    prompt,
+    seq: 0,
+    finished: false,
   };
+
+  runLogger.createRun({
+    id: run.id,
+    taskId: task.id,
+    taskTitle: task.title,
+    agentId: agent.id,
+    agentName: agent.name,
+    owner: task.owner,
+    priority: task.priority,
+    skill: task.skill,
+    laneAtStart: task.lane,
+    pid: child.pid,
+    status: 'running',
+    startedAt: run.startedAt,
+    updatedAt: run.startedAt,
+    promptText: prompt,
+  });
+  runLogger.appendEvent({
+    runId: run.id,
+    eventType: 'spawned',
+    status: 'running',
+    message: `${agent.name} started task execution.`,
+    details: { args, pid: child.pid, cwd: ROOT_WORKSPACE },
+    createdAt: run.startedAt,
+  });
 
   activeRuns.set(task.id, run);
   task.assignedAgentId = agent.id;
@@ -427,6 +491,7 @@ async function launchTaskRun(task, agent) {
   task.runStatus = 'running';
   task.updatedAt = Date.now();
   task.lastRun = {
+    id: run.id,
     status: 'running',
     startedAt: run.startedAt,
     output: '',
@@ -437,49 +502,212 @@ async function launchTaskRun(task, agent) {
   await persistState();
 
   child.stdout.on('data', (chunk) => {
-    run.stdout += String(chunk);
+    const text = String(chunk);
+    run.stdout += text;
+    run.seq += 1;
+    runLogger.appendLog({
+      runId: run.id,
+      seq: run.seq,
+      stream: 'stdout',
+      chunkText: text,
+      createdAt: Date.now(),
+    });
   });
 
   child.stderr.on('data', (chunk) => {
-    run.stderr += String(chunk);
+    const text = String(chunk);
+    run.stderr += text;
+    run.seq += 1;
+    runLogger.appendLog({
+      runId: run.id,
+      seq: run.seq,
+      stream: 'stderr',
+      chunkText: text,
+      createdAt: Date.now(),
+    });
+  });
+
+  child.on('error', async (error) => {
+    if (run.finished) {
+      return;
+    }
+    run.finished = true;
+    const finishedAt = Date.now();
+    const failureDetails = error instanceof Error ? error.message : String(error);
+    task.updatedAt = finishedAt;
+    task.lane = 'ready';
+    task.runStatus = 'failed';
+    task.assignedAgentId = null;
+    task.lastRun = {
+      id: run.id,
+      status: 'failed',
+      startedAt: run.startedAt,
+      finishedAt,
+      output: '',
+      usage: null,
+      error: failureDetails,
+    };
+    activeRuns.delete(task.id);
+    runLogger.appendEvent({
+      runId: run.id,
+      eventType: 'process_error',
+      status: 'failed',
+      message: 'OpenClaw process failed before completion.',
+      details: { failureDetails },
+      createdAt: finishedAt,
+    });
+    runLogger.updateRun({
+      id: run.id,
+      status: 'failed',
+      finishedAt,
+      durationMs: finishedAt - run.startedAt,
+      updatedAt: finishedAt,
+      failureDetails,
+      errorText: failureDetails,
+    });
+    runLogger.addArtifact({
+      runId: run.id,
+      artifactType: 'failure',
+      label: 'Process error',
+      contentText: failureDetails,
+      contentJson: { failureDetails },
+      createdAt: finishedAt,
+    });
+    pushActivity(`${agent.name} failed to start ${task.title}. The task moved back to Ready.`, 'warning');
+    await persistState();
   });
 
   child.on('close', async (code) => {
+    if (run.finished) {
+      return;
+    }
+    run.finished = true;
     const finishedAt = Date.now();
-    const parsed = tryParseJson(run.stdout.trim()) || extractJsonFromMixedText(run.stderr);
-    const usage = parsed?.meta?.agentMeta?.usage || parsed?.meta?.agentMeta?.lastCallUsage || null;
-    const output = (parsed?.payloads || []).map((item) => item.text).filter(Boolean).join('\n\n').trim();
-    const hasPayload = Array.isArray(parsed?.payloads) && parsed.payloads.some((item) => item.text || item.mediaUrl);
+    const parsed =
+      tryParseJson(run.stdout.trim()) ||
+      extractJsonFromMixedText(run.stdout) ||
+      extractJsonFromMixedText(run.stderr);
+    const resultEnvelope = parsed?.result && typeof parsed.result === 'object' ? parsed.result : parsed;
+    const payloads = Array.isArray(resultEnvelope?.payloads) ? resultEnvelope.payloads : [];
+    const meta = resultEnvelope?.meta || parsed?.meta || null;
+    const usage = meta?.agentMeta?.usage || meta?.agentMeta?.lastCallUsage || null;
+    const agentMeta = meta?.agentMeta || null;
+    const output = payloads.map((item) => item.text).filter(Boolean).join('\n\n').trim();
+    const hasPayload = payloads.some((item) => item.text || item.mediaUrl);
     const runNote = sanitizeRunNote(run.stderr);
+    const summaryText = extractSummarySection(output);
+    const failureText = !hasPayload ? run.stderr.trim() || run.stdout.trim() || `Exit code ${code}` : runNote;
 
     task.updatedAt = finishedAt;
+    runLogger.appendEvent({
+      runId: run.id,
+      eventType: 'process_closed',
+      status: hasPayload ? 'succeeded' : 'failed',
+      message: hasPayload ? 'Run completed with payload output.' : 'Run closed without usable payload output.',
+      details: {
+        exitCode: code,
+        hasPayload,
+        sessionId: agentMeta?.sessionId || null,
+        model: agentMeta?.model || null,
+      },
+      createdAt: finishedAt,
+    });
 
     if (hasPayload) {
       task.lane = 'review';
       task.runStatus = 'succeeded';
       task.lastRun = {
+        id: run.id,
         status: 'succeeded',
         startedAt: run.startedAt,
         finishedAt,
         output,
         usage,
-        sessionId: parsed?.meta?.agentMeta?.sessionId || null,
-        model: parsed?.meta?.agentMeta?.model || null,
+        sessionId: agentMeta?.sessionId || null,
+        model: agentMeta?.model || null,
         error: runNote,
       };
+      runLogger.updateRun({
+        id: run.id,
+        status: 'succeeded',
+        exitCode: code,
+        finishedAt,
+        durationMs: finishedAt - run.startedAt,
+        updatedAt: finishedAt,
+        sessionId: agentMeta?.sessionId || null,
+        sessionKey: agentMeta?.sessionKey || null,
+        model: agentMeta?.model || null,
+        usage,
+        summaryText,
+        outputText: output || null,
+        errorText: runNote || null,
+      });
+      if (summaryText) {
+        runLogger.addArtifact({
+          runId: run.id,
+          artifactType: 'summary',
+          label: 'Agent summary',
+          contentText: summaryText,
+          createdAt: finishedAt,
+        });
+      }
+      if (output) {
+        runLogger.addArtifact({
+          runId: run.id,
+          artifactType: 'report',
+          label: 'Execution report',
+          contentText: output,
+          contentJson: payloads || null,
+          createdAt: finishedAt,
+        });
+      }
+      if (usage) {
+        runLogger.addArtifact({
+          runId: run.id,
+          artifactType: 'usage',
+          label: 'Usage metadata',
+          contentJson: usage,
+          createdAt: finishedAt,
+        });
+      }
       pushActivity(`${agent.name} finished ${task.title}. Review is ready.`, 'info');
     } else {
       task.lane = 'ready';
       task.runStatus = 'failed';
       task.assignedAgentId = null;
       task.lastRun = {
+        id: run.id,
         status: 'failed',
         startedAt: run.startedAt,
         finishedAt,
         output: output || '',
         usage,
-        error: run.stderr.trim() || run.stdout.trim() || `Exit code ${code}`,
+        error: failureText,
       };
+      runLogger.updateRun({
+        id: run.id,
+        status: 'failed',
+        exitCode: code,
+        finishedAt,
+        durationMs: finishedAt - run.startedAt,
+        updatedAt: finishedAt,
+        sessionId: agentMeta?.sessionId || null,
+        sessionKey: agentMeta?.sessionKey || null,
+        model: agentMeta?.model || null,
+        usage,
+        failureDetails: failureText,
+        summaryText,
+        outputText: output || null,
+        errorText: failureText,
+      });
+      runLogger.addArtifact({
+        runId: run.id,
+        artifactType: 'failure',
+        label: `Exit code ${code}`,
+        contentText: failureText,
+        contentJson: { exitCode: code, stderr: run.stderr, stdout: run.stdout },
+        createdAt: finishedAt,
+      });
       pushActivity(`${agent.name} failed ${task.title}. The task moved back to Ready.`, 'warning');
     }
 
@@ -553,6 +781,45 @@ function pickAgentForTask(task, requestedAgentId) {
   return agents.sort((a, b) => a.name.localeCompare(b.name))[0] || null;
 }
 
+function normalizeSystemTask(task) {
+  return {
+    id: task.taskId || task.id || null,
+    runId: task.runId || null,
+    label: task.label || task.task || task.taskId || task.id || 'OpenClaw task',
+    runtime: task.runtime || 'unknown',
+    status: task.status || 'unknown',
+    agentId: task.agentId || null,
+    scopeKind: task.scopeKind || null,
+    ownerKey: task.ownerKey || null,
+    sessionKey: task.childSessionKey || null,
+    requesterSessionKey: task.requesterSessionKey || null,
+    sourceId: task.sourceId || null,
+    deliveryStatus: task.deliveryStatus || null,
+    createdAt: task.createdAt || null,
+    startedAt: task.startedAt || null,
+    endedAt: task.endedAt || null,
+    updatedAt: task.lastEventAt || task.endedAt || task.startedAt || task.createdAt || 0,
+    summary: task.terminalSummary || null,
+  };
+}
+
+function normalizeSystemSession(session) {
+  return {
+    key: session.key,
+    sessionId: session.sessionId || null,
+    agentId: session.agentId || null,
+    kind: session.kind || null,
+    model: session.model || null,
+    updatedAt: session.updatedAt || 0,
+    systemSent: Boolean(session.systemSent),
+    abortedLastRun: Boolean(session.abortedLastRun),
+    thinkingLevel: session.thinkingLevel || null,
+    inputTokens: Number(session.inputTokens || 0),
+    outputTokens: Number(session.outputTokens || 0),
+    totalTokens: Number(session.totalTokens || 0),
+  };
+}
+
 async function buildDashboardPayload() {
   if (!telemetryCache.updatedAt) {
     await refreshTelemetry();
@@ -561,6 +828,12 @@ async function buildDashboardPayload() {
   const configuredAgents = telemetryCache.configuredAgents;
   const sessions = telemetryCache.sessions;
   const backgroundTasks = telemetryCache.backgroundTasks;
+  const systemHistoryTasks = backgroundTasks
+    .map(normalizeSystemTask)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const systemHistorySessions = sessions
+    .map(normalizeSystemSession)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
   const mergedAgents = agentCatalog.map((agent) => {
     const configured = configuredAgents.find((item) => item.id === agent.id) || null;
@@ -595,6 +868,9 @@ async function buildDashboardPayload() {
 
   return {
     generatedAt: Date.now(),
+    storage: {
+      runHistoryDbPath: runLogger.path,
+    },
     projects: projectCatalog,
     lanes,
     tasks: [...state.tasks].sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0)),
@@ -602,11 +878,17 @@ async function buildDashboardPayload() {
     agents: mergedAgents,
     approvals: state.tasks.filter((task) => task.lane === 'approval'),
     activeRuns: Array.from(activeRuns.values()).map((run) => ({
+      id: run.id,
       taskId: run.taskId,
       agentId: run.agentId,
       pid: run.pid,
       startedAt: run.startedAt,
     })),
+    runs: runLogger.getRecentRuns(80),
+    systemHistory: {
+      tasks: systemHistoryTasks,
+      sessions: systemHistorySessions,
+    },
     metrics: {
       taskCount: state.tasks.length,
       readyCount: state.tasks.filter((task) => task.lane === 'ready').length,
@@ -614,6 +896,8 @@ async function buildDashboardPayload() {
       busyAgentCount: mergedAgents.filter((agent) => agent.status === 'busy').length,
       doneCount: state.tasks.filter((task) => task.lane === 'done').length,
       totalSessionTokens,
+      systemTaskCount: systemHistoryTasks.length,
+      systemSessionCount: systemHistorySessions.length,
     },
     openclaw: {
       sessions,
@@ -879,9 +1163,18 @@ function sanitizeRunNote(raw) {
   return filtered || null;
 }
 
+function extractSummarySection(output) {
+  if (!output) {
+    return null;
+  }
+
+  const match = output.match(/Summary\s*\n([\s\S]*?)(?:\n\n[A-Z][^\n]*\n|$)/);
+  return match?.[1]?.trim() || null;
+}
+
 async function execOpenClawJson(args) {
   return await new Promise((resolve, reject) => {
-    const child = spawn('openclaw', [...args], {
+    const child = spawn(OPENCLAW_BIN, [...args], {
       cwd: ROOT_WORKSPACE,
       env: process.env,
     });
@@ -900,10 +1193,10 @@ async function execOpenClawJson(args) {
     child.on('error', reject);
     child.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(stderr.trim() || stdout.trim() || `openclaw ${args.join(' ')} exited with code ${code}`));
+        reject(new Error(stderr.trim() || stdout.trim() || `${OPENCLAW_BIN} ${args.join(' ')} exited with code ${code}`));
         return;
       }
-      const parsed = tryParseJson(stdout.trim());
+      const parsed = tryParseJson(stdout.trim()) || extractJsonFromMixedText(stdout) || extractJsonFromMixedText(stderr);
       resolve(parsed ?? stdout.trim());
     });
   });

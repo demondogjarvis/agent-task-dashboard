@@ -21,7 +21,10 @@
           <button class="nav-link" data-view-link="agents">Agents</button>
           <button class="nav-link" data-view-link="runtime">Runtime</button>
           <button class="nav-link" data-view-link="history">History</button>
+          <button class="nav-link" data-view-link="system-history">System History</button>
         </nav>
+
+        <button id="theme-toggle-button" type="button" class="nav-link theme-toggle" aria-pressed="false">Switch to dark mode</button>
 
         <div class="sidebar-card">
           <p class="eyebrow">What changed</p>
@@ -232,6 +235,18 @@
             <article class="panel">
               <div class="panel-header">
                 <div>
+                  <p class="eyebrow">Run history</p>
+                  <h3>Durable agent execution log</h3>
+                </div>
+                <span class="pill neutral" id="run-count-pill">0 runs</span>
+              </div>
+              <p id="run-summary" class="subtitle"></p>
+              <div id="run-list" class="history-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
                   <p class="eyebrow">Completed work</p>
                   <h3>Done task history</h3>
                 </div>
@@ -239,6 +254,34 @@
               </div>
               <p id="history-summary" class="subtitle"></p>
               <div id="history-list" class="history-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="system-history">
+          <div class="history-layout">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">OpenClaw task history</p>
+                  <h3>System-wide durable task runs</h3>
+                </div>
+                <span class="pill neutral" id="system-task-history-count-pill">0 tasks</span>
+              </div>
+              <p id="system-task-history-summary" class="subtitle"></p>
+              <div id="system-task-history-list" class="history-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Session activity</p>
+                  <h3>System-wide agent session history</h3>
+                </div>
+                <span class="pill neutral" id="system-session-history-count-pill">0 sessions</span>
+              </div>
+              <p id="system-session-history-summary" class="subtitle"></p>
+              <div id="system-session-history-list" class="history-list"></div>
             </article>
           </div>
         </section>
@@ -324,6 +367,14 @@
           <p id="task-detail-run-status" class="task-detail-copy"></p>
           <p id="task-detail-output" class="task-run-note"></p>
           <p id="task-detail-error" class="task-run-note error-note"></p>
+        </section>
+
+        <section class="task-detail-section">
+          <div class="task-comments-header">
+            <p class="eyebrow">Run history</p>
+            <span id="task-run-history-count" class="pill neutral">0 runs</span>
+          </div>
+          <div id="task-run-history" class="history-list"></div>
         </section>
 
         <section class="task-detail-section">
