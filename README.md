@@ -2,6 +2,13 @@
 
 A local browser app for managing staged agent work with real OpenClaw-backed runs.
 
+## Company / project context
+
+- Internal dashboard for Bjorn's Agent Control workflow
+- Used to manage tasks, projects, agent assignments, and execution history
+- Built to support safer, more structured agent operations inside OpenClaw
+- Intended for internal use, not a public-facing product
+
 ## What it does now
 
 - Persists board state in `data/state.json`
