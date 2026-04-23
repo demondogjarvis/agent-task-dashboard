@@ -10,10 +10,12 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 4311);
 const HOST = process.env.HOST || '127.0.0.1';
 const OPENCLAW_BIN = process.env.OPENCLAW_BIN || 'openclaw';
+const GIT_BIN = process.env.GIT_BIN || 'git';
 const DATA_DIR = path.join(__dirname, 'data');
 const STATE_PATH = path.join(DATA_DIR, 'state.json');
 const RUNS_DB_PATH = path.join(DATA_DIR, 'run-history.sqlite');
 const ROOT_WORKSPACE = path.resolve(__dirname, '..');
+const GITHUB_REPOS_DIR = path.join(ROOT_WORKSPACE, 'github-repos');
 const AGENT_WORKSPACES_DIR = path.join(__dirname, 'agent-workspaces');
 
 const laneOrder = ['intake', 'definition', 'approval', 'ready', 'inprogress', 'review', 'done'];
@@ -96,6 +98,7 @@ let telemetryCache = {
 let refreshTelemetryPromise = null;
 
 await ensureDirectory(DATA_DIR);
+await ensureDirectory(GITHUB_REPOS_DIR);
 await ensureDirectory(AGENT_WORKSPACES_DIR);
 
 const server = http.createServer(async (req, res) => {
@@ -533,7 +536,32 @@ function moveTask(task, direction) {
 }
 
 async function launchTaskRun(task, agent) {
-  const prompt = buildTaskPrompt(task, agent);
+  let executionContext;
+
+  try {
+    executionContext = await prepareTaskExecutionContext(task);
+  } catch (error) {
+    const finishedAt = Date.now();
+    const failureDetails = error instanceof Error ? error.message : String(error);
+    task.updatedAt = finishedAt;
+    task.lane = 'ready';
+    task.runStatus = 'failed';
+    task.assignedAgentId = null;
+    task.lastRun = {
+      id: null,
+      status: 'failed',
+      startedAt: finishedAt,
+      finishedAt,
+      output: '',
+      usage: null,
+      error: failureDetails,
+    };
+    pushActivity(`Failed to prepare a repo workspace for ${task.title}.`, 'warning');
+    await persistState();
+    throw error;
+  }
+
+  const prompt = buildTaskPrompt(task, agent, executionContext);
   const args = [
     'agent',
     '--agent',
@@ -546,7 +574,7 @@ async function launchTaskRun(task, agent) {
   ];
 
   const child = spawn(OPENCLAW_BIN, args, {
-    cwd: ROOT_WORKSPACE,
+    cwd: executionContext.cwd,
     env: process.env,
   });
 
@@ -586,7 +614,15 @@ async function launchTaskRun(task, agent) {
     eventType: 'spawned',
     status: 'running',
     message: `${agent.name} started task execution.`,
-    details: { args, pid: child.pid, cwd: ROOT_WORKSPACE },
+    details: {
+      args,
+      pid: child.pid,
+      cwd: executionContext.cwd,
+      projectName: executionContext.project?.name || null,
+      repoUrl: executionContext.project?.repoUrl || null,
+      repoDir: executionContext.repoDir || null,
+      branchName: executionContext.branchName || null,
+    },
     createdAt: run.startedAt,
   });
 
