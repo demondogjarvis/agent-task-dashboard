@@ -25,7 +25,16 @@
           <button class="nav-link" data-view-link="system-history">System History</button>
         </nav>
 
-        <button id="theme-toggle-button" type="button" class="nav-link theme-toggle" aria-pressed="false">Switch to dark mode</button>
+        <label class="theme-toggle" for="theme-toggle-button">
+          <span class="theme-toggle-copy">
+            <span class="theme-toggle-title">Theme</span>
+            <span id="theme-toggle-label" class="theme-toggle-label">Light mode</span>
+          </span>
+          <input id="theme-toggle-button" type="checkbox" class="theme-toggle-input" role="switch" aria-label="Toggle dark mode" />
+          <span class="theme-toggle-track" aria-hidden="true">
+            <span class="theme-toggle-thumb"></span>
+          </span>
+        </label>
 
         <div class="sidebar-card">
           <p class="eyebrow">What changed</p>

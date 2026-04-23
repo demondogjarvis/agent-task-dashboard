@@ -136,6 +136,7 @@ const reassignCancelButton = document.getElementById('reassign-cancel-button');
 const cardTemplate = document.getElementById('task-card-template');
 const THEME_STORAGE_KEY = 'jarvis-theme';
 const themeToggleButton = document.getElementById('theme-toggle-button');
+const themeToggleLabel = document.getElementById('theme-toggle-label');
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -172,8 +173,12 @@ function applyTheme(theme, persist = true) {
   document.documentElement.style.colorScheme = resolved;
 
   if (themeToggleButton) {
-    themeToggleButton.textContent = resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
-    themeToggleButton.setAttribute('aria-pressed', resolved === 'dark' ? 'true' : 'false');
+    themeToggleButton.checked = resolved === 'dark';
+    themeToggleButton.setAttribute('aria-checked', resolved === 'dark' ? 'true' : 'false');
+  }
+
+  if (themeToggleLabel) {
+    themeToggleLabel.textContent = resolved === 'dark' ? 'Dark mode' : 'Light mode';
   }
 
   if (persist) {
@@ -190,7 +195,7 @@ function initTheme() {
 }
 
 function toggleTheme() {
-  applyTheme(document.body.dataset.theme === 'dark' ? 'light' : 'dark');
+  applyTheme(themeToggleButton?.checked ? 'dark' : 'light');
 }
 
 function getCurrentView() {
@@ -1402,7 +1407,7 @@ taskDetailEditToggle.addEventListener('click', () => {
   renderTaskDetail();
 });
 
-themeToggleButton?.addEventListener('click', toggleTheme);
+themeToggleButton?.addEventListener('change', toggleTheme);
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && selectedTaskId) {
