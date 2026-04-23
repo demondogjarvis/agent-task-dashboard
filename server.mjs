@@ -345,13 +345,13 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: 'validation', message: 'direction must be -1 or 1.' });
       return;
     }
-    const moved = moveTask(task, direction);
+    const moved = await moveTask(task, direction);
     if (!moved.ok) {
       sendJson(res, 400, { error: 'invalid_state', message: moved.message });
       return;
     }
     await persistState();
-    sendJson(res, 200, { ok: true, task });
+    sendJson(res, 200, { ok: true, task, publish: moved.publish || null });
     return;
   }
 
@@ -492,7 +492,7 @@ async function handleApi(req, res, url) {
   sendJson(res, 404, { error: 'not_found' });
 }
 
-function moveTask(task, direction) {
+async function moveTask(task, direction) {
   if (task.lane === 'inprogress' && activeRuns.has(task.id)) {
     return { ok: false, message: 'This task is actively running and cannot be moved manually.' };
   }
@@ -514,10 +514,15 @@ function moveTask(task, direction) {
   }
 
   if (task.lane === 'review' && nextLane === 'done') {
+    const publish = await publishTaskProjectChanges(task);
+    if (!publish.ok) {
+      return publish;
+    }
     task.lane = 'done';
+    task.assignedAgentId = null;
     task.updatedAt = Date.now();
-    pushActivity(`${task.title} marked Done after review.`, 'info');
-    return { ok: true };
+    pushActivity(`${task.title} marked Done after review.${publish.message ? ` ${publish.message}` : ''}`, 'info');
+    return { ok: true, publish };
   }
 
   if (task.lane === 'inprogress' && direction < 0) {
@@ -1137,6 +1142,44 @@ async function prepareTaskExecutionContext(task) {
     repoDir,
     branchName,
   };
+}
+
+async function getCurrentBranch(repoDir) {
+  const result = await runCommand(GIT_BIN, ['branch', '--show-current'], { cwd: repoDir }).catch(() => ({ stdout: '' }));
+  return result.stdout.trim() || null;
+}
+
+async function publishTaskProjectChanges(task) {
+  const project = state.projects.find((item) => item.name === task.owner) || null;
+  if (!project?.repoUrl) {
+    return { ok: true, message: 'No linked repo was configured for this task.' };
+  }
+
+  const repoDir = await ensureBaseRepoClone(project);
+  const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
+  const cwd = (await pathExists(path.join(worktreeDir, '.git'))) ? worktreeDir : repoDir;
+  const branchName = await getCurrentBranch(cwd);
+
+  if (!branchName) {
+    return { ok: false, message: 'No git branch is checked out for this task workspace.' };
+  }
+
+  const statusBefore = await runCommand(GIT_BIN, ['status', '--porcelain'], { cwd });
+  if (statusBefore.stdout.trim()) {
+    await runCommand(GIT_BIN, ['add', '-A'], { cwd });
+    const staged = await runCommand(GIT_BIN, ['diff', '--cached', '--name-only'], { cwd }).catch(() => ({ stdout: '' }));
+    if (staged.stdout.trim()) {
+      await runCommand(GIT_BIN, ['commit', '-m', `Task ${task.id}: ${task.title}`], { cwd });
+    }
+  }
+
+  const hasCommits = await repoHasCommits(cwd);
+  if (!hasCommits) {
+    return { ok: true, branchName, message: 'No commit was created because the repo still has no committed changes.' };
+  }
+
+  await runCommand(GIT_BIN, ['push', '-u', 'origin', branchName], { cwd });
+  return { ok: true, branchName, message: `Committed and pushed ${branchName} to origin.` };
 }
 
 function pickAgentForTask(task, requestedAgentId) {
