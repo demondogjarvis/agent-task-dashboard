@@ -195,6 +195,14 @@
                   Repository URL
                   <input id="project-repo-url" name="repoUrl" type="text" placeholder="https://github.com/acme/project" required />
                 </label>
+                <label>
+                  Git commit rules
+                  <select id="project-git-workflow" name="gitWorkflow">
+                    <option value="direct-main">Update main directly</option>
+                    <option value="feature-branches" selected>Use feature branches</option>
+                    <option value="agent-branch">Dedicated agent branch</option>
+                  </select>
+                </label>
                 <label class="wide">
                   Notes
                   <textarea id="project-notes" name="notes" rows="3" placeholder="Optional context, conventions, or owner notes"></textarea>

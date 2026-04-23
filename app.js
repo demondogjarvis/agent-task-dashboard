@@ -98,6 +98,7 @@ const projectForm = document.getElementById('project-form');
 const projectNameInput = document.getElementById('project-name');
 const projectRepoUrlInput = document.getElementById('project-repo-url');
 const projectNotesInput = document.getElementById('project-notes');
+const projectGitWorkflowSelect = document.getElementById('project-git-workflow');
 const projectSubmitButton = document.getElementById('project-submit-button');
 const projectCancelButton = document.getElementById('project-cancel-button');
 const taskDetailDrawer = document.getElementById('task-detail-drawer');
@@ -275,6 +276,17 @@ function getProjectName(project) {
 
 function getProjectRepoUrl(project) {
   return typeof project === 'string' ? '' : project?.repoUrl || '';
+}
+
+function getProjectGitWorkflow(project) {
+  return typeof project === 'string' ? 'feature-branches' : project?.gitWorkflow || 'feature-branches';
+}
+
+function getProjectWorkflowLabel(project) {
+  const workflow = getProjectGitWorkflow(project);
+  if (workflow === 'direct-main') return 'Update main directly';
+  if (workflow === 'agent-branch') return 'Dedicated agent branch';
+  return 'Use feature branches';
 }
 
 function getSortedProjects() {
@@ -1010,6 +1022,7 @@ function openProjectEdit(projectId) {
   selectedProjectId = project.id;
   projectNameInput.value = project.name || '';
   projectRepoUrlInput.value = project.repoUrl || '';
+  projectGitWorkflowSelect.value = getProjectGitWorkflow(project);
   projectNotesInput.value = project.notes || '';
   syncProjectFormMode();
   renderProjects();
@@ -1039,6 +1052,9 @@ function renderProjects() {
                 <span class="pill neutral">${taskCount} task${taskCount === 1 ? '' : 's'}</span>
               </div>
               <p>${escapeHtml(project.notes || 'No notes added yet.')}</p>
+              <div class="task-meta">
+                <span class="tag">${escapeHtml(getProjectWorkflowLabel(project))}</span>
+              </div>
               <div class="task-actions">
                 <button type="button" class="button ghost" data-project-action="edit" data-project-id="${project.id}">Edit</button>
                 <button type="button" class="button ghost danger" data-project-action="delete" data-project-id="${project.id}">Delete</button>
@@ -1303,6 +1319,7 @@ projectForm.addEventListener('submit', (event) => {
   const payload = {
     name: formData.get('name'),
     repoUrl: formData.get('repoUrl'),
+    gitWorkflow: formData.get('gitWorkflow'),
     notes: formData.get('notes'),
   };
 

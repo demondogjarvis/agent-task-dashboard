@@ -148,6 +148,7 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const name = String(body.name || '').trim();
     const repoUrl = String(body.repoUrl || '').trim();
+    const gitWorkflow = normalizeProjectWorkflow(body.gitWorkflow);
     const notes = String(body.notes || '').trim();
 
     if (!name) {
@@ -169,6 +170,7 @@ async function handleApi(req, res, url) {
       id: nextId('project'),
       name,
       repoUrl,
+      gitWorkflow,
       notes,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -193,6 +195,7 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     const nextName = String(body.name || '').trim();
     const nextRepoUrl = String(body.repoUrl || '').trim();
+    const nextGitWorkflow = normalizeProjectWorkflow(body.gitWorkflow);
     const nextNotes = String(body.notes || '').trim();
 
     if (!nextName) {
@@ -216,6 +219,7 @@ async function handleApi(req, res, url) {
     const previousName = project.name;
     project.name = nextName;
     project.repoUrl = nextRepoUrl;
+    project.gitWorkflow = nextGitWorkflow;
     project.notes = nextNotes;
     project.updatedAt = Date.now();
 
@@ -1142,6 +1146,7 @@ async function loadOrCreateState() {
               id: String(project.id || nextId('project')),
               name: String(project.name || '').trim(),
               repoUrl: String(project.repoUrl || '').trim(),
+              gitWorkflow: normalizeProjectWorkflow(project.gitWorkflow),
               notes: String(project.notes || '').trim(),
               createdAt: Number(project.createdAt || Date.now()),
               updatedAt: Number(project.updatedAt || Date.now()),
@@ -1204,6 +1209,13 @@ async function readJsonBody(req) {
     return {};
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function normalizeProjectWorkflow(value) {
+  const workflow = String(value || '').trim();
+  return ['direct-main', 'feature-branches', 'agent-branch'].includes(workflow)
+    ? workflow
+    : 'feature-branches';
 }
 
 function nextId(prefix) {
