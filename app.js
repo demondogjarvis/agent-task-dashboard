@@ -20,6 +20,10 @@ const viewMeta = {
     title: 'Tasks',
     description: 'Define work, approve it, and move it through the execution lanes.',
   },
+  projects: {
+    title: 'Projects',
+    description: 'Create and manage the project list that feeds task creation and task editing.',
+  },
   agents: {
     title: 'Agents',
     description: 'Browse the specialist agents that exist, what they handle, and their current token footprint.',
@@ -45,6 +49,7 @@ let pendingReassignTaskId = null;
 let selectedTaskId = null;
 let taskDetailDraftTaskId = null;
 let isTaskEditMode = false;
+let selectedProjectId = null;
 
 const statsGrid = document.getElementById('stats-grid');
 const approvalList = document.getElementById('approval-list');
@@ -85,6 +90,16 @@ const newTaskButton = document.getElementById('new-task-button');
 const refreshButton = document.getElementById('refresh-button');
 const pageTitle = document.getElementById('page-title');
 const pageDescription = document.getElementById('page-description');
+const projectList = document.getElementById('project-list');
+const projectSummary = document.getElementById('project-summary');
+const projectCountPill = document.getElementById('project-count-pill');
+const projectFormModePill = document.getElementById('project-form-mode-pill');
+const projectForm = document.getElementById('project-form');
+const projectNameInput = document.getElementById('project-name');
+const projectRepoUrlInput = document.getElementById('project-repo-url');
+const projectNotesInput = document.getElementById('project-notes');
+const projectSubmitButton = document.getElementById('project-submit-button');
+const projectCancelButton = document.getElementById('project-cancel-button');
 const taskDetailDrawer = document.getElementById('task-detail-drawer');
 const taskDetailBackdrop = document.getElementById('task-detail-backdrop');
 const taskDetailCloseButton = document.getElementById('task-detail-close');
@@ -214,20 +229,24 @@ function populateFormOptions() {
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
-      (agent) => `<option value="${agent.id}">${agent.name} (${skillLabels[agent.specialty] || agent.specialty})</option>`
+      (agent) => `<option value="${agent.id}">${escapeHtml(agent.name)} (${escapeHtml(skillLabels[agent.specialty] || agent.specialty)})</option>`
     )
     .join('');
 
-  projectSelect.innerHTML = dashboard.projects
-    .map((project) => `<option value="${project}">${project}</option>`)
-    .join('');
+  const projects = getSortedProjects();
+  const projectOptions = projects.length
+    ? ['<option value="">Select a project</option>', ...projects.map((project) => `<option value="${escapeHtml(getProjectName(project))}">${escapeHtml(getProjectName(project))}</option>`)]
+    : ['<option value="">No projects yet</option>'];
+  projectSelect.innerHTML = projectOptions.join('');
 
   if (currentAgentValue && dashboard.agents.some((agent) => agent.id === currentAgentValue)) {
     agentSelect.value = currentAgentValue;
   }
 
-  if (currentProjectValue && dashboard.projects.includes(currentProjectValue)) {
+  if (currentProjectValue && projects.some((project) => getProjectName(project) === currentProjectValue)) {
     projectSelect.value = currentProjectValue;
+  } else if (projects.length && !currentProjectValue) {
+    projectSelect.value = getProjectName(projects[0]);
   }
 }
 
@@ -236,7 +255,7 @@ function populateAgentSelectOptions(selectElement, selectedValue = '') {
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
-      (agent) => `<option value="${agent.id}">${agent.name} (${skillLabels[agent.specialty] || agent.specialty})</option>`
+      (agent) => `<option value="${agent.id}">${escapeHtml(agent.name)} (${escapeHtml(skillLabels[agent.specialty] || agent.specialty)})</option>`
     )
     .join('');
 
@@ -245,12 +264,37 @@ function populateAgentSelectOptions(selectElement, selectedValue = '') {
   }
 }
 
-function populateProjectSelectOptions(selectElement, selectedValue = '') {
-  const projects = dashboard.projects.includes(selectedValue) || !selectedValue
-    ? dashboard.projects
-    : [selectedValue, ...dashboard.projects];
+function getProjectName(project) {
+  return typeof project === 'string' ? project : project?.name || '';
+}
 
-  selectElement.innerHTML = projects.map((project) => `<option value="${project}">${project}</option>`).join('');
+function getProjectRepoUrl(project) {
+  return typeof project === 'string' ? '' : project?.repoUrl || '';
+}
+
+function getSortedProjects() {
+  return [...(dashboard.projects || [])].filter(Boolean).sort((a, b) => getProjectName(a).localeCompare(getProjectName(b)));
+}
+
+function populateProjectSelectOptions(selectElement, selectedValue = '', { allowFallback = true, includePlaceholder = false } = {}) {
+  const projects = getSortedProjects();
+  const options = [];
+
+  if (includePlaceholder) {
+    options.push('<option value="">Select a project</option>');
+  }
+
+  if (projects.length) {
+    options.push(...projects.map((project) => `<option value="${escapeHtml(getProjectName(project))}">${escapeHtml(getProjectName(project))}</option>`));
+  } else if (!includePlaceholder) {
+    options.push('<option value="">No projects yet</option>');
+  }
+
+  if (allowFallback && selectedValue && !projects.some((project) => getProjectName(project) === selectedValue)) {
+    options.push(`<option value="${escapeHtml(selectedValue)}">${escapeHtml(selectedValue)}</option>`);
+  }
+
+  selectElement.innerHTML = options.join('');
 
   if (selectedValue) {
     selectElement.value = selectedValue;
@@ -937,6 +981,76 @@ function renderSystemHistory() {
     : '<div class="empty-state">No system-wide session activity yet.</div>';
 }
 
+function getProjectTaskCount(projectName) {
+  return dashboard.tasks.filter((task) => task.owner === projectName).length;
+}
+
+function syncProjectFormMode() {
+  const editing = Boolean(selectedProjectId);
+  projectFormModePill.textContent = editing ? 'Edit' : 'Create';
+  projectSubmitButton.textContent = editing ? 'Save project' : 'Create project';
+  projectCancelButton.hidden = !editing;
+}
+
+function clearProjectForm() {
+  selectedProjectId = null;
+  projectForm.reset();
+  syncProjectFormMode();
+}
+
+function openProjectEdit(projectId) {
+  const project = dashboard.projects.find((item) => item.id === projectId);
+  if (!project) return;
+
+  selectedProjectId = project.id;
+  projectNameInput.value = project.name || '';
+  projectRepoUrlInput.value = project.repoUrl || '';
+  projectNotesInput.value = project.notes || '';
+  syncProjectFormMode();
+  renderProjects();
+  projectForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  projectNameInput.focus();
+}
+
+function renderProjects() {
+  const projects = getSortedProjects();
+
+  projectCountPill.textContent = `${projects.length} project${projects.length === 1 ? '' : 's'}`;
+  projectSummary.textContent = projects.length
+    ? `${projects.length} linked project${projects.length === 1 ? '' : 's'} available for task creation and task editing.`
+    : 'No projects yet. Add the first GitHub repo to populate the task dropdown.';
+
+  projectList.innerHTML = projects.length
+    ? projects
+        .map((project) => {
+          const taskCount = getProjectTaskCount(getProjectName(project));
+          return `
+            <article class="project-card">
+              <div class="project-card-header">
+                <div>
+                  <h3>${escapeHtml(getProjectName(project))}</h3>
+                  <p><a href="${escapeHtml(getProjectRepoUrl(project))}" target="_blank" rel="noreferrer">${escapeHtml(getProjectRepoUrl(project))}</a></p>
+                </div>
+                <span class="pill neutral">${taskCount} task${taskCount === 1 ? '' : 's'}</span>
+              </div>
+              <p>${escapeHtml(project.notes || 'No notes added yet.')}</p>
+              <div class="task-actions">
+                <button type="button" class="button ghost" data-project-action="edit" data-project-id="${project.id}">Edit</button>
+                <button type="button" class="button ghost danger" data-project-action="delete" data-project-id="${project.id}">Delete</button>
+              </div>
+            </article>
+          `;
+        })
+        .join('')
+    : '<div class="empty-state">No projects yet. Add your first linked GitHub repo here.</div>';
+
+  if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) {
+    clearProjectForm();
+  } else {
+    syncProjectFormMode();
+  }
+}
+
 function renderTaskRunHistory(task) {
   const runs = (dashboard.runs || []).filter((run) => run.taskId === task.id);
   taskRunHistoryCount.textContent = `${runs.length} run${runs.length === 1 ? '' : 's'}`;
@@ -951,7 +1065,7 @@ function syncTaskDetailForms(task) {
   }
 
   populateAgentSelectOptions(taskEditAgent, task.preferredAgentId || '');
-  populateProjectSelectOptions(taskEditOwner, task.owner || '');
+  populateProjectSelectOptions(taskEditOwner, task.owner || '', { allowFallback: true, includePlaceholder: true });
   taskEditTitle.value = task.title || '';
   taskEditPriority.value = task.priority || 'medium';
   taskEditNotes.value = task.notes || '';
@@ -1059,6 +1173,7 @@ function renderAll() {
   renderActivity();
   renderSessions();
   renderBackgroundTasks();
+  renderProjects();
   renderRuns();
   renderHistory();
   renderSystemHistory();
@@ -1115,6 +1230,22 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  const projectButton = event.target.closest('button[data-project-id]');
+  if (projectButton) {
+    const { projectAction, projectId } = projectButton.dataset;
+    if (projectAction === 'edit') {
+      openProjectEdit(projectId);
+      return;
+    }
+    if (projectAction === 'delete') {
+      const project = dashboard.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      if (!window.confirm(`Delete project "${project.name}"? Tasks will keep their existing project name.`)) return;
+      mutate(() => api(`/api/projects/${projectId}`, { method: 'DELETE' }));
+      return;
+    }
+  }
+
   const taskButton = event.target.closest('button[data-task-id]');
   if (!taskButton) return;
 
@@ -1159,6 +1290,50 @@ taskForm.addEventListener('submit', (event) => {
     taskForm.reset();
     document.getElementById('task-priority').value = 'medium';
   });
+});
+
+projectForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const formData = new FormData(projectForm);
+  const payload = {
+    name: formData.get('name'),
+    repoUrl: formData.get('repoUrl'),
+    notes: formData.get('notes'),
+  };
+
+  mutate(async () => {
+    const hasEditableProject = Boolean(selectedProjectId) && dashboard.projects.some((project) => project.id === selectedProjectId);
+
+    if (hasEditableProject) {
+      try {
+        await api(`/api/projects/${selectedProjectId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+      } catch (error) {
+        if (String(error.message || '').includes('not_found')) {
+          selectedProjectId = null;
+          await api('/api/projects', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+        } else {
+          throw error;
+        }
+      }
+    } else {
+      selectedProjectId = null;
+      await api('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    }
+    clearProjectForm();
+  });
+});
+
+projectCancelButton.addEventListener('click', () => {
+  clearProjectForm();
 });
 
 taskEditForm.addEventListener('submit', (event) => {

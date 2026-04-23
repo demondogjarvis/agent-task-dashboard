@@ -74,15 +74,6 @@ const agentCatalog = [
   },
 ];
 
-const projectCatalog = [
-  'Agent Control',
-  'Northstar Finance',
-  'Atlas Rollout',
-  'Launch Ops',
-  'Internal Tools',
-  'Internal',
-  'Unassigned stream',
-];
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -145,6 +136,116 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/runs') {
     const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') || 80)));
     sendJson(res, 200, { runs: runLogger.getRecentRuns(limit) });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/projects') {
+    sendJson(res, 200, { projects: [...state.projects].sort((a, b) => a.name.localeCompare(b.name)) });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/projects') {
+    const body = await readJsonBody(req);
+    const name = String(body.name || '').trim();
+    const repoUrl = String(body.repoUrl || '').trim();
+    const notes = String(body.notes || '').trim();
+
+    if (!name) {
+      sendJson(res, 400, { error: 'validation', message: 'Project name is required.' });
+      return;
+    }
+
+    if (!repoUrl) {
+      sendJson(res, 400, { error: 'validation', message: 'Repository URL is required.' });
+      return;
+    }
+
+    if (state.projects.some((project) => project.name.toLowerCase() === name.toLowerCase())) {
+      sendJson(res, 400, { error: 'validation', message: 'A project with that name already exists.' });
+      return;
+    }
+
+    const project = {
+      id: nextId('project'),
+      name,
+      repoUrl,
+      notes,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    state.projects.unshift(project);
+    pushActivity(`Project created: ${project.name}.`, 'info');
+    await persistState();
+    sendJson(res, 201, { ok: true, project });
+    return;
+  }
+
+  const projectRoute = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+  if (projectRoute && req.method === 'PATCH') {
+    const [, projectId] = projectRoute;
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) {
+      sendJson(res, 404, { error: 'not_found', message: 'Project not found.' });
+      return;
+    }
+
+    const body = await readJsonBody(req);
+    const nextName = String(body.name || '').trim();
+    const nextRepoUrl = String(body.repoUrl || '').trim();
+    const nextNotes = String(body.notes || '').trim();
+
+    if (!nextName) {
+      sendJson(res, 400, { error: 'validation', message: 'Project name is required.' });
+      return;
+    }
+
+    if (!nextRepoUrl) {
+      sendJson(res, 400, { error: 'validation', message: 'Repository URL is required.' });
+      return;
+    }
+
+    const duplicate = state.projects.some(
+      (item) => item.id !== project.id && item.name.toLowerCase() === nextName.toLowerCase()
+    );
+    if (duplicate) {
+      sendJson(res, 400, { error: 'validation', message: 'A project with that name already exists.' });
+      return;
+    }
+
+    const previousName = project.name;
+    project.name = nextName;
+    project.repoUrl = nextRepoUrl;
+    project.notes = nextNotes;
+    project.updatedAt = Date.now();
+
+    if (previousName !== nextName) {
+      state.tasks.forEach((task) => {
+        if (task.owner === previousName) {
+          task.owner = nextName;
+          task.updatedAt = Date.now();
+        }
+      });
+    }
+
+    pushActivity(`Project updated: ${project.name}.`, 'info');
+    await persistState();
+    sendJson(res, 200, { ok: true, project });
+    return;
+  }
+
+  if (projectRoute && req.method === 'DELETE') {
+    const [, projectId] = projectRoute;
+    const project = state.projects.find((item) => item.id === projectId);
+    if (!project) {
+      sendJson(res, 404, { error: 'not_found', message: 'Project not found.' });
+      return;
+    }
+
+    state.projects = state.projects.filter((item) => item.id !== project.id);
+    pushActivity(`Project removed: ${project.name}.`, 'warning');
+    await persistState();
+    sendJson(res, 200, { ok: true, projectId: project.id });
     return;
   }
 
@@ -871,7 +972,7 @@ async function buildDashboardPayload() {
     storage: {
       runHistoryDbPath: runLogger.path,
     },
-    projects: projectCatalog,
+    projects: [...state.projects].sort((a, b) => a.name.localeCompare(b.name)),
     lanes,
     tasks: [...state.tasks].sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0)),
     activity: state.activity.slice(0, 20),
@@ -944,6 +1045,7 @@ function pushActivity(message, tone = 'info') {
 function createSeedState() {
   const now = Date.now();
   return {
+    projects: [],
     tasks: [
       {
         id: 'task-seed-101',
@@ -1033,6 +1135,18 @@ async function loadOrCreateState() {
     const parsed = JSON.parse(raw);
     return {
       ...parsed,
+      projects: Array.isArray(parsed.projects)
+        ? parsed.projects
+            .filter((project) => project && typeof project === 'object' && typeof project.name === 'string')
+            .map((project) => ({
+              id: String(project.id || nextId('project')),
+              name: String(project.name || '').trim(),
+              repoUrl: String(project.repoUrl || '').trim(),
+              notes: String(project.notes || '').trim(),
+              createdAt: Number(project.createdAt || Date.now()),
+              updatedAt: Number(project.updatedAt || Date.now()),
+            }))
+        : [],
       tasks: Array.isArray(parsed.tasks)
         ? parsed.tasks.map((task) => ({
             ...task,

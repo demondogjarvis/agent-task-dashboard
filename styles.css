@@ -151,7 +151,8 @@ body[data-theme="dark"] .approval-item,
 body[data-theme="dark"] .agent-card,
 body[data-theme="dark"] .usage-card,
 body[data-theme="dark"] .activity-item,
-body[data-theme="dark"] .history-card {
+body[data-theme="dark"] .history-card,
+body[data-theme="dark"] .project-card {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(232, 210, 239, 0.08);
 }
@@ -361,6 +362,7 @@ p {
 .hero-grid,
 .control-grid,
 .overview-grid,
+.projects-grid,
 .agents-grid,
 .runtime-grid,
 .history-layout {
@@ -378,6 +380,10 @@ p {
 
 .control-grid {
   grid-template-columns: 1.35fr 1fr;
+}
+
+.projects-grid {
+  grid-template-columns: 1fr 1.1fr;
 }
 
 .agents-grid {
@@ -468,13 +474,15 @@ p {
   color: var(--text-soft);
 }
 
-.task-form {
+.task-form,
+.project-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
-.task-form label {
+.task-form label,
+.project-form label {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -483,6 +491,7 @@ p {
 }
 
 .task-form label.wide,
+.project-form label.wide,
 .form-actions.wide {
   grid-column: 1 / -1;
 }
@@ -510,7 +519,8 @@ textarea:focus {
 .agent-list,
 .usage-list,
 .activity-list,
-.history-list {
+.history-list,
+.project-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -524,7 +534,8 @@ textarea:focus {
 .agent-card,
 .usage-card,
 .activity-item,
-.history-card {
+.history-card,
+.project-card {
   padding: 14px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.7);
@@ -533,7 +544,8 @@ textarea:focus {
 
 .approval-item h3,
 .agent-card h3,
-.usage-card h3 {
+.usage-card h3,
+.project-card h3 {
   font-size: 1rem;
 }
 
@@ -542,6 +554,7 @@ textarea:focus {
 .usage-card p,
 .activity-item p,
 .task-card p,
+.project-card p,
 .sidebar-card p {
   color: var(--muted);
   line-height: 1.45;
@@ -712,6 +725,29 @@ textarea:focus {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+}
+
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.project-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.project-card a {
+  color: var(--accent);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.project-card a:hover {
+  text-decoration: underline;
 }
 
 .column-footer {
@@ -903,6 +939,7 @@ textarea:focus {
   }
 
   .overview-grid,
+  .projects-grid,
   .agents-grid,
   .runtime-grid,
   .control-grid {

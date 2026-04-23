@@ -20,6 +20,7 @@
           <button class="nav-link" data-view-link="tasks">Tasks</button>
           <button class="nav-link" data-view-link="agents">Agents</button>
           <button class="nav-link" data-view-link="runtime">Runtime</button>
+          <button class="nav-link" data-view-link="projects">Projects</button>
           <button class="nav-link" data-view-link="history">History</button>
           <button class="nav-link" data-view-link="system-history">System History</button>
         </nav>
@@ -165,6 +166,49 @@
             </div>
             <div id="kanban-board" class="kanban-board"></div>
           </section>
+        </section>
+        <section class="page-view" data-view="projects">
+          <div class="projects-grid">
+            <article class="panel project-form-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Project intake</p>
+                  <h3>Manage the projects tasks can be assigned to</h3>
+                </div>
+                <span class="pill neutral" id="project-form-mode-pill">Create</span>
+              </div>
+              <form id="project-form" class="project-form">
+                <label>
+                  Project name
+                  <input id="project-name" name="name" type="text" placeholder="Agent Control" required />
+                </label>
+                <label>
+                  Repository URL
+                  <input id="project-repo-url" name="repoUrl" type="text" placeholder="https://github.com/acme/project" required />
+                </label>
+                <label class="wide">
+                  Notes
+                  <textarea id="project-notes" name="notes" rows="3" placeholder="Optional context, conventions, or owner notes"></textarea>
+                </label>
+                <div class="form-actions wide">
+                  <button type="submit" id="project-submit-button" class="button primary">Create project</button>
+                  <button type="button" id="project-cancel-button" class="button ghost" hidden>Cancel edit</button>
+                </div>
+              </form>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Projects</p>
+                  <h3>Linked projects used in task dropdowns</h3>
+                </div>
+                <span class="pill neutral" id="project-count-pill">0 projects</span>
+              </div>
+              <p id="project-summary" class="subtitle"></p>
+              <div id="project-list" class="project-list"></div>
+            </article>
+          </div>
         </section>
 
         <section class="page-view" data-view="agents">
