@@ -866,7 +866,7 @@ function limitPromptSection(text, maxLength = 4000) {
   return text.length > maxLength ? `${text.slice(0, maxLength).trim()}\n[truncated]` : text;
 }
 
-function buildTaskPrompt(task, agent) {
+function buildTaskPrompt(task, agent, executionContext = null) {
   const commentLines = Array.isArray(task.comments) && task.comments.length
     ? task.comments.map((comment) => `- ${comment.author}: ${comment.text}`).join('\n')
     : 'None.';
@@ -883,6 +883,20 @@ function buildTaskPrompt(task, agent) {
         .join('\n\n')
     : 'No previous run context.';
 
+  const repoSection = executionContext?.project
+    ? [
+        'Project repo context:',
+        `Project: ${executionContext.project.name}`,
+        `Repository URL: ${executionContext.project.repoUrl}`,
+        `Local task workspace: ${executionContext.cwd}`,
+        'Work only inside this repository unless the task explicitly requires shared workspace changes.',
+      ].join('\n')
+    : [
+        'Project repo context:',
+        'No linked project repo was resolved for this task.',
+        `Fallback workspace: ${executionContext?.cwd || ROOT_WORKSPACE}`,
+      ].join('\n');
+
   return [
     `You are ${agent.name}, a specialized ${agent.specialty} agent working for Bjorn through Jarvis.`,
     `Handle this task carefully and be accurate.`,
@@ -892,6 +906,8 @@ function buildTaskPrompt(task, agent) {
     `Required skill: ${task.skill}`,
     `Owner or stream: ${task.owner}`,
     `Task notes: ${task.notes || 'No additional notes provided.'}`,
+    '',
+    repoSection,
     'Task comments:',
     commentLines,
     '',
@@ -906,6 +922,182 @@ function buildTaskPrompt(task, agent) {
     '',
     'If you cannot complete the task from the current context, say what is missing instead of bluffing.',
   ].join('\n');
+}
+
+function sanitizePathSegment(value) {
+  const sanitized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return sanitized || 'repo';
+}
+
+function normalizeRepoUrl(repoUrl) {
+  const raw = String(repoUrl || '').trim();
+  if (!raw) return '';
+
+  const sshMatch = raw.match(/^git@([^:]+):(.+)$/);
+  if (sshMatch) {
+    const [, host, repoPath] = sshMatch;
+    return `${host}/${repoPath.replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '').toLowerCase()}`;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.host}${parsed.pathname}`.replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '').toLowerCase();
+  } catch {
+    return raw.replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '').toLowerCase();
+  }
+}
+
+function parseRepoIdentity(repoUrl) {
+  const normalized = normalizeRepoUrl(repoUrl);
+  if (!normalized) return null;
+
+  const parts = normalized.split('/').filter(Boolean);
+  if (!parts.length) return null;
+
+  const name = parts.at(-1) || null;
+  const owner = parts.length >= 2 ? parts.at(-2) : null;
+  return {
+    owner,
+    name,
+  };
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runCommand(command, args, options = {}) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env || process.env,
+    });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+
+      const error = new Error(`${command} ${args.join(' ')} failed with code ${code}: ${(stderr || stdout).trim()}`);
+      error.code = code;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    });
+  });
+}
+
+async function getGitOriginUrl(repoDir) {
+  try {
+    const result = await runCommand(GIT_BIN, ['remote', 'get-url', 'origin'], { cwd: repoDir });
+    return result.stdout.trim();
+  } catch {
+    return '';
+  }
+}
+
+async function findExistingRepoClone(repoUrl) {
+  const normalized = normalizeRepoUrl(repoUrl);
+  if (!normalized) return null;
+
+  const entries = await fs.readdir(GITHUB_REPOS_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const repoDir = path.join(GITHUB_REPOS_DIR, entry.name);
+    if (!(await pathExists(path.join(repoDir, '.git')))) continue;
+    const originUrl = await getGitOriginUrl(repoDir);
+    if (originUrl && normalizeRepoUrl(originUrl) === normalized) {
+      return repoDir;
+    }
+  }
+
+  return null;
+}
+
+function deriveRepoClonePath(repoUrl) {
+  const identity = parseRepoIdentity(repoUrl);
+  if (!identity?.name) {
+    return path.join(GITHUB_REPOS_DIR, `repo-${Date.now()}`);
+  }
+
+  if (identity.owner) {
+    return path.join(GITHUB_REPOS_DIR, `${sanitizePathSegment(identity.owner)}__${sanitizePathSegment(identity.name)}`);
+  }
+
+  return path.join(GITHUB_REPOS_DIR, sanitizePathSegment(identity.name));
+}
+
+async function ensureBaseRepoClone(project) {
+  let repoDir = await findExistingRepoClone(project.repoUrl);
+
+  if (!repoDir) {
+    repoDir = deriveRepoClonePath(project.repoUrl);
+    await runCommand(GIT_BIN, ['clone', project.repoUrl, repoDir], { cwd: GITHUB_REPOS_DIR });
+    return repoDir;
+  }
+
+  await runCommand(GIT_BIN, ['fetch', 'origin', '--prune'], { cwd: repoDir }).catch(() => {});
+  return repoDir;
+}
+
+async function resolveDefaultBranch(repoDir) {
+  try {
+    const result = await runCommand(GIT_BIN, ['symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: repoDir });
+    return result.stdout.trim().replace(/^refs\/remotes\/origin\//, '') || 'main';
+  } catch {
+    const branch = await runCommand(GIT_BIN, ['branch', '--show-current'], { cwd: repoDir }).catch(() => ({ stdout: '' }));
+    return branch.stdout.trim() || 'main';
+  }
+}
+
+async function prepareTaskExecutionContext(task) {
+  const project = state.projects.find((item) => item.name === task.owner) || null;
+  if (!project?.repoUrl) {
+    return {
+      cwd: ROOT_WORKSPACE,
+      project: null,
+      repoDir: null,
+      branchName: null,
+    };
+  }
+
+  const repoDir = await ensureBaseRepoClone(project);
+  const defaultBranch = await resolveDefaultBranch(repoDir);
+  const branchName = `task-${sanitizePathSegment(task.id)}`;
+  const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
+
+  if (!(await pathExists(path.join(worktreeDir, '.git')))) {
+    if (await pathExists(worktreeDir)) {
+      await fs.rm(worktreeDir, { recursive: true, force: true });
+    }
+    await runCommand(GIT_BIN, ['worktree', 'add', '-B', branchName, worktreeDir, `origin/${defaultBranch}`], { cwd: repoDir });
+  }
+
+  return {
+    cwd: worktreeDir,
+    project,
+    repoDir,
+    branchName,
+  };
 }
 
 function pickAgentForTask(task, requestedAgentId) {
