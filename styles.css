@@ -574,6 +574,34 @@ p {
   color: var(--text-soft);
 }
 
+.working-pill::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.85;
+  animation: working-pulse 0.9s ease-in-out infinite;
+}
+
+body.is-mutating .button {
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+@keyframes working-pulse {
+  0%,
+  100% {
+    transform: scale(0.75);
+    opacity: 0.45;
+  }
+
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
 .task-form,
 .project-form {
   display: grid;

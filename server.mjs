@@ -982,12 +982,29 @@ async function pathExists(targetPath) {
 
 async function runCommand(command, args, options = {}) {
   return await new Promise((resolve, reject) => {
+    const timeoutMs = Number(options.timeoutMs || 45000);
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: options.env || process.env,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GH_PROMPT_DISABLED: '1',
+        ...(options.env || {}),
+      },
     });
     let stdout = '';
     let stderr = '';
+    let finished = false;
+
+    const timer = setTimeout(() => {
+      if (finished) return;
+      child.kill('SIGTERM');
+      const error = new Error(`${command} ${args.join(' ')} timed out after ${timeoutMs}ms`);
+      error.code = 'ETIMEDOUT';
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    }, timeoutMs);
 
     child.stdout.on('data', (chunk) => {
       stdout += String(chunk);
@@ -995,8 +1012,16 @@ async function runCommand(command, args, options = {}) {
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk);
     });
-    child.on('error', reject);
+    child.on('error', (error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      reject(error);
+    });
     child.on('close', (code) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -1150,36 +1175,41 @@ async function getCurrentBranch(repoDir) {
 }
 
 async function publishTaskProjectChanges(task) {
-  const project = state.projects.find((item) => item.name === task.owner) || null;
-  if (!project?.repoUrl) {
-    return { ok: true, message: 'No linked repo was configured for this task.' };
-  }
-
-  const repoDir = await ensureBaseRepoClone(project);
-  const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
-  const cwd = (await pathExists(path.join(worktreeDir, '.git'))) ? worktreeDir : repoDir;
-  const branchName = await getCurrentBranch(cwd);
-
-  if (!branchName) {
-    return { ok: false, message: 'No git branch is checked out for this task workspace.' };
-  }
-
-  const statusBefore = await runCommand(GIT_BIN, ['status', '--porcelain'], { cwd });
-  if (statusBefore.stdout.trim()) {
-    await runCommand(GIT_BIN, ['add', '-A'], { cwd });
-    const staged = await runCommand(GIT_BIN, ['diff', '--cached', '--name-only'], { cwd }).catch(() => ({ stdout: '' }));
-    if (staged.stdout.trim()) {
-      await runCommand(GIT_BIN, ['commit', '-m', `Task ${task.id}: ${task.title}`], { cwd });
+  try {
+    const project = state.projects.find((item) => item.name === task.owner) || null;
+    if (!project?.repoUrl) {
+      return { ok: true, message: 'No linked repo was configured for this task.' };
     }
-  }
 
-  const hasCommits = await repoHasCommits(cwd);
-  if (!hasCommits) {
-    return { ok: true, branchName, message: 'No commit was created because the repo still has no committed changes.' };
-  }
+    const repoDir = await ensureBaseRepoClone(project);
+    const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
+    const cwd = (await pathExists(path.join(worktreeDir, '.git'))) ? worktreeDir : repoDir;
+    const branchName = await getCurrentBranch(cwd);
 
-  await runCommand(GIT_BIN, ['push', '-u', 'origin', branchName], { cwd });
-  return { ok: true, branchName, message: `Committed and pushed ${branchName} to origin.` };
+    if (!branchName) {
+      return { ok: false, message: 'No git branch is checked out for this task workspace.' };
+    }
+
+    const statusBefore = await runCommand(GIT_BIN, ['status', '--porcelain'], { cwd });
+    if (statusBefore.stdout.trim()) {
+      await runCommand(GIT_BIN, ['add', '-A'], { cwd });
+      const staged = await runCommand(GIT_BIN, ['diff', '--cached', '--name-only'], { cwd }).catch(() => ({ stdout: '' }));
+      if (staged.stdout.trim()) {
+        await runCommand(GIT_BIN, ['commit', '-m', `Task ${task.id}: ${task.title}`], { cwd });
+      }
+    }
+
+    const hasCommits = await repoHasCommits(cwd);
+    if (!hasCommits) {
+      return { ok: true, branchName, message: 'No commit was created because the repo still has no committed changes.' };
+    }
+
+    await runCommand(GIT_BIN, ['push', '-u', 'origin', branchName], { cwd, timeoutMs: 30000 });
+    return { ok: true, branchName, message: `Committed and pushed ${branchName} to origin.` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, message: `Could not publish this task's repo changes: ${message}` };
+  }
 }
 
 function pickAgentForTask(task, requestedAgentId) {

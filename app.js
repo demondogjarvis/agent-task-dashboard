@@ -88,6 +88,7 @@ const agentCountPill = document.getElementById('agent-count-pill');
 const seedReadyButton = document.getElementById('seed-ready-button');
 const newTaskButton = document.getElementById('new-task-button');
 const refreshButton = document.getElementById('refresh-button');
+const mutateStatus = document.getElementById('mutate-status');
 const pageTitle = document.getElementById('page-title');
 const pageDescription = document.getElementById('page-description');
 const projectList = document.getElementById('project-list');
@@ -1233,6 +1234,8 @@ async function refreshDashboard() {
 async function mutate(action) {
   if (isMutating) return;
   isMutating = true;
+  document.body.classList.add('is-mutating');
+  if (mutateStatus) mutateStatus.hidden = false;
   try {
     await action();
     taskDetailDraftTaskId = null;
@@ -1241,6 +1244,8 @@ async function mutate(action) {
     window.alert(error.message);
   } finally {
     isMutating = false;
+    document.body.classList.remove('is-mutating');
+    if (mutateStatus) mutateStatus.hidden = true;
   }
 }
 
