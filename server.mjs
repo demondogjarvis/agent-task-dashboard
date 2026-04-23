@@ -1062,10 +1062,37 @@ async function ensureBaseRepoClone(project) {
 async function resolveDefaultBranch(repoDir) {
   try {
     const result = await runCommand(GIT_BIN, ['symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: repoDir });
-    return result.stdout.trim().replace(/^refs\/remotes\/origin\//, '') || 'main';
+    const branch = result.stdout.trim().replace(/^refs\/remotes\/origin\//, '');
+    if (branch) return branch;
+  } catch {}
+
+  try {
+    const result = await runCommand(GIT_BIN, ['remote', 'show', 'origin'], { cwd: repoDir });
+    const match = result.stdout.match(/HEAD branch:\s+(.+)/);
+    const branch = match?.[1]?.trim();
+    if (branch && branch !== '(unknown)') return branch;
+  } catch {}
+
+  try {
+    const result = await runCommand(GIT_BIN, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin'], { cwd: repoDir });
+    const branch = result.stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && line !== 'origin/HEAD')
+      .map((line) => line.replace(/^origin\//, ''))[0];
+    if (branch) return branch;
+  } catch {}
+
+  const localBranch = await runCommand(GIT_BIN, ['branch', '--show-current'], { cwd: repoDir }).catch(() => ({ stdout: '' }));
+  return localBranch.stdout.trim() || null;
+}
+
+async function repoHasCommits(repoDir) {
+  try {
+    await runCommand(GIT_BIN, ['rev-parse', '--verify', 'HEAD'], { cwd: repoDir });
+    return true;
   } catch {
-    const branch = await runCommand(GIT_BIN, ['branch', '--show-current'], { cwd: repoDir }).catch(() => ({ stdout: '' }));
-    return branch.stdout.trim() || 'main';
+    return false;
   }
 }
 
@@ -1081,15 +1108,27 @@ async function prepareTaskExecutionContext(task) {
   }
 
   const repoDir = await ensureBaseRepoClone(project);
-  const defaultBranch = await resolveDefaultBranch(repoDir);
   const branchName = `task-${sanitizePathSegment(task.id)}`;
+
+  if (!(await repoHasCommits(repoDir))) {
+    await runCommand(GIT_BIN, ['checkout', '--orphan', branchName], { cwd: repoDir }).catch(() => {});
+    return {
+      cwd: repoDir,
+      project,
+      repoDir,
+      branchName,
+    };
+  }
+
+  const defaultBranch = await resolveDefaultBranch(repoDir);
   const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
 
   if (!(await pathExists(path.join(worktreeDir, '.git')))) {
     if (await pathExists(worktreeDir)) {
       await fs.rm(worktreeDir, { recursive: true, force: true });
     }
-    await runCommand(GIT_BIN, ['worktree', 'add', '-B', branchName, worktreeDir, `origin/${defaultBranch}`], { cwd: repoDir });
+    const baseRef = defaultBranch ? `origin/${defaultBranch}` : 'HEAD';
+    await runCommand(GIT_BIN, ['worktree', 'add', '-B', branchName, worktreeDir, baseRef], { cwd: repoDir });
   }
 
   return {
