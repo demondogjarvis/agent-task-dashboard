@@ -88,6 +88,7 @@ const agentCountPill = document.getElementById('agent-count-pill');
 const seedReadyButton = document.getElementById('seed-ready-button');
 const newTaskButton = document.getElementById('new-task-button');
 const refreshButton = document.getElementById('refresh-button');
+const restartServerButton = document.getElementById('restart-server-button');
 const mutateStatus = document.getElementById('mutate-status');
 const pageTitle = document.getElementById('page-title');
 const pageDescription = document.getElementById('page-description');
@@ -1424,6 +1425,33 @@ seedReadyButton.addEventListener('click', () => {
 
 refreshButton.addEventListener('click', () => {
   refreshDashboard().catch((error) => window.alert(error.message));
+});
+
+restartServerButton?.addEventListener('click', async () => {
+  const shouldRestart = window.confirm('Restart the dashboard server now? This is useful if the UI has gone stale, but it will interrupt any active task runs.');
+  if (!shouldRestart) {
+    return;
+  }
+
+  restartServerButton.disabled = true;
+  if (mutateStatus) {
+    mutateStatus.textContent = 'Restarting server…';
+    mutateStatus.hidden = false;
+  }
+
+  try {
+    await api('/api/server/restart', { method: 'POST' });
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 1800);
+  } catch (error) {
+    restartServerButton.disabled = false;
+    if (mutateStatus) {
+      mutateStatus.textContent = 'Working…';
+      mutateStatus.hidden = true;
+    }
+    window.alert(error.message);
+  }
 });
 
 taskDetailCloseButton.addEventListener('click', closeTaskDetail);

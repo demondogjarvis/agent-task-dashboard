@@ -89,6 +89,7 @@ const mimeTypes = {
 const activeRuns = new Map();
 let state = await loadOrCreateState();
 const runLogger = createRunLogger({ dbPath: RUNS_DB_PATH });
+let restartPending = false;
 let telemetryCache = {
   configuredAgents: [],
   sessions: [],
@@ -133,6 +134,29 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/dashboard') {
     const dashboard = await buildDashboardPayload();
     sendJson(res, 200, dashboard);
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/server/restart') {
+    if (restartPending) {
+      sendJson(res, 409, { error: 'restart_pending', message: 'A dashboard restart is already in progress.' });
+      return;
+    }
+
+    if (activeRuns.size > 0) {
+      sendJson(res, 409, {
+        error: 'restart_blocked',
+        message: `Cannot restart while ${activeRuns.size} task run${activeRuns.size === 1 ? '' : 's'} ${activeRuns.size === 1 ? 'is' : 'are'} active.`,
+      });
+      return;
+    }
+
+    restartPending = true;
+    pushActivity('Dashboard server restart requested by operator.', 'warning');
+    sendJson(res, 202, { ok: true, restarting: true });
+    setTimeout(() => {
+      scheduleServerRestart();
+    }, 150);
     return;
   }
 
@@ -1520,6 +1544,26 @@ async function loadOrCreateState() {
     await fs.writeFile(STATE_PATH, JSON.stringify(seed, null, 2));
     return seed;
   }
+}
+
+function scheduleServerRestart() {
+  const logPath = '/tmp/agent-task-dashboard.log';
+  const script = `sleep 1; exec "${process.execPath}" "${__filename}" >> "${logPath}" 2>&1`;
+  const child = spawn('sh', ['-lc', script], {
+    cwd: __dirname,
+    env: process.env,
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+
+  server.close(() => {
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    process.exit(0);
+  }, 400).unref();
 }
 
 async function persistState() {
