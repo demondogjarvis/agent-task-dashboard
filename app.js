@@ -645,7 +645,7 @@ function renderStats() {
     {
       label: 'Completed after review',
       value: metrics.doneCount,
-      detail: `${dashboard.activeRuns.length} active process${dashboard.activeRuns.length === 1 ? '' : 'es'}`,
+      detail: `${dashboard.activeRuns.length + (dashboard.reviewEnvironments?.length || 0)} active process${dashboard.activeRuns.length + (dashboard.reviewEnvironments?.length || 0) === 1 ? '' : 'es'}`,
     },
   ];
 
@@ -859,6 +859,12 @@ function renderKanban() {
       if (task.liveStatus?.message) {
         notesNode.textContent = `${task.liveStatus.message} Started ${relativeTime(task.liveStatus.startedAt)}.`;
         notesNode.classList.add('live-task-note');
+      } else if (task.reviewEnvironment?.message) {
+        notesNode.textContent = task.reviewEnvironment.message;
+        notesNode.classList.add('live-task-note');
+        if (task.reviewEnvironment.status === 'failed') {
+          notesNode.classList.add('error-note');
+        }
       } else {
         notesNode.remove();
       }
@@ -888,6 +894,13 @@ function renderKanban() {
         statusTag.className = 'tag';
         statusTag.textContent = `Run: ${task.lastRun.status}`;
         node.querySelector('.task-meta').appendChild(statusTag);
+      }
+
+      if (task.reviewEnvironment?.status) {
+        const reviewTag = document.createElement('span');
+        reviewTag.className = 'tag';
+        reviewTag.textContent = `Review env: ${task.reviewEnvironment.status}`;
+        node.querySelector('.task-meta').appendChild(reviewTag);
       }
 
       node.addEventListener('click', (event) => {
@@ -1481,12 +1494,20 @@ function renderTaskDetail() {
   const preferredAgent = findAgent(task.preferredAgentId);
   const cleanError = cleanRuntimeNote(task.lastRun?.error);
   const outputPreview = task.lastRun?.output ? truncate(task.lastRun.output, 600) : '';
+  const reviewEnvironment = task.reviewEnvironment || null;
+  const reviewServiceSummary = reviewEnvironment?.services?.length
+    ? reviewEnvironment.services
+        .map((service) => `${service.name}: ${service.status}${service.localUrl ? ` (${service.localUrl})` : ''}`)
+        .join(' • ')
+    : '';
+  const reviewFailure = reviewEnvironment?.services?.find((service) => service.error)?.error || '';
   const detailTags = [
     task.priority,
     skillLabels[task.skill] || task.skill,
     boardProject ? null : task.owner || 'No stream',
     agent ? `${agent.emoji} ${agent.name}` : 'Unassigned',
     preferredAgent ? `Preferred: ${preferredAgent.name}` : null,
+    reviewEnvironment ? `Review env: ${reviewEnvironment.status}` : null,
     `${comments.length} comment${comments.length === 1 ? '' : 's'}`,
     task.lane === 'done' ? `Completed ${relativeTime(getTaskCompletionTime(task))}` : `Updated ${relativeTime(task.updatedAt)}`,
   ].filter(Boolean);
@@ -1503,13 +1524,22 @@ function renderTaskDetail() {
   taskDetailEditSection.hidden = !isTaskEditMode;
   taskDetailEditToggle.textContent = isTaskEditMode ? 'Cancel edit' : 'Edit';
   taskDetailEditToggle.disabled = editLocked;
-  taskDetailRunStatus.textContent = task.lastRun?.status
-    ? `Run status: ${task.lastRun.status}${task.lastRun?.usage?.total ? ` · ${task.lastRun.usage.total.toLocaleString()} tokens` : ''}`
-    : task.runStatus === 'running'
-      ? 'Run status: running'
-      : 'No run details recorded yet.';
-  taskDetailOutput.textContent = outputPreview ? `Latest run: ${outputPreview}` : '';
-  taskDetailError.textContent = cleanError ? `Runtime note: ${cleanError}` : '';
+  taskDetailRunStatus.textContent = [
+    task.lastRun?.status
+      ? `Run status: ${task.lastRun.status}${task.lastRun?.usage?.total ? ` · ${task.lastRun.usage.total.toLocaleString()} tokens` : ''}`
+      : task.runStatus === 'running'
+        ? 'Run status: running'
+        : 'No run details recorded yet.',
+    reviewEnvironment ? `Review environment: ${reviewEnvironment.message}` : '',
+  ].filter(Boolean).join(' · ');
+  taskDetailOutput.textContent = [
+    outputPreview ? `Latest run: ${outputPreview}` : '',
+    reviewServiceSummary ? `Review services: ${reviewServiceSummary}` : '',
+  ].filter(Boolean).join('\n\n');
+  taskDetailError.textContent = [
+    cleanError ? `Runtime note: ${cleanError}` : '',
+    reviewFailure ? `Review environment: ${reviewFailure}` : '',
+  ].filter(Boolean).join('\n');
   taskDetailActions.innerHTML = buildTaskActions(task, { includeSecondary: true });
   taskEditSubmitButton.textContent = editLocked ? 'Locked while running' : 'Save changes';
   [taskEditTitle, taskEditPriority, taskEditAgent, taskEditNotes, taskEditSubmitButton].forEach((element) => {
@@ -1662,6 +1692,21 @@ document.addEventListener('click', (event) => {
   const { action, taskId } = taskButton.dataset;
   if (action === 'move-left') {
     mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: -1 }) }));
+  }
+  if (action === 'start-review') {
+    mutate(() => api(`/api/tasks/${taskId}/review/start`, { method: 'POST' }));
+  }
+  if (action === 'stop-review') {
+    mutate(() => api(`/api/tasks/${taskId}/review/stop`, { method: 'POST' }));
+  }
+  if (action === 'open-review') {
+    const task = dashboard.tasks.find((item) => item.id === taskId);
+    const openUrl = task?.reviewEnvironment?.openUrl;
+    if (!openUrl) {
+      window.alert('No local review URL is ready yet for this task.');
+      return;
+    }
+    window.open(openUrl, '_blank', 'noopener,noreferrer');
   }
   if (action === 'move-right') {
     mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: 1 }) }));

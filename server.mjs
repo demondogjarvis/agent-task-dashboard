@@ -1422,7 +1422,7 @@ async function stopTaskReviewEnvironment(taskId, options = {}) {
 
   await Promise.all(
     (session.services || []).map(async (service) => {
-      if (!service?.process || ['failed', 'stopped'].includes(service.status)) {
+      if (!service?.process || service.status === 'stopped') {
         return;
       }
       await stopReviewServiceProcess(service);
