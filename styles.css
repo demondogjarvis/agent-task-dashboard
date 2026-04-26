@@ -1190,6 +1190,42 @@ textarea:focus {
   font-size: 0.92rem;
 }
 
+.field-help {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.split-dialog-card {
+  min-width: min(780px, calc(100vw - 32px));
+}
+
+.split-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.split-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(89, 48, 104, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.split-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.split-plan-grid .wide {
+  grid-column: 1 / -1;
+}
+
 .empty-state {
   color: var(--muted);
   padding: 16px;

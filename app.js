@@ -46,6 +46,7 @@ let dashboard = null;
 let pollHandle = null;
 let isMutating = false;
 let pendingReassignTaskId = null;
+let pendingSplitTaskId = null;
 let selectedTaskId = null;
 let taskDetailDraftTaskId = null;
 let isTaskEditMode = false;
@@ -132,6 +133,7 @@ const taskEditAgent = document.getElementById('task-edit-agent');
 const taskEditOwner = document.getElementById('task-edit-owner');
 const taskEditOwnerField = document.getElementById('task-edit-owner-field');
 const taskEditNotes = document.getElementById('task-edit-notes');
+const taskEditBlockedBy = document.getElementById('task-edit-blocked-by');
 const taskCommentCount = document.getElementById('task-comment-count');
 const taskCommentList = document.getElementById('task-comment-list');
 const taskCommentForm = document.getElementById('task-comment-form');
@@ -150,6 +152,12 @@ const reassignTaskTitle = document.getElementById('reassign-task-title');
 const reassignAgentSelect = document.getElementById('reassign-agent-select');
 const reassignConfirmButton = document.getElementById('reassign-confirm-button');
 const reassignCancelButton = document.getElementById('reassign-cancel-button');
+const splitTaskDialog = document.getElementById('split-task-dialog');
+const splitTaskTitle = document.getElementById('split-task-title');
+const splitTaskSummary = document.getElementById('split-task-summary');
+const splitTaskPlanList = document.getElementById('split-task-plan-list');
+const splitTaskConfirmButton = document.getElementById('split-task-confirm-button');
+const splitTaskCancelButton = document.getElementById('split-task-cancel-button');
 const cardTemplate = document.getElementById('task-card-template');
 const THEME_STORAGE_KEY = 'jarvis-theme';
 const themeToggleButton = document.getElementById('theme-toggle-button');
@@ -316,6 +324,14 @@ function populateAgentSelectOptions(selectElement, selectedValue = '') {
   }
 }
 
+function buildAgentOptions(selectedValue = '') {
+  return dashboard.agents
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((agent) => `<option value="${agent.id}" ${agent.id === selectedValue ? 'selected' : ''}>${escapeHtml(agent.name)} (${escapeHtml(skillLabels[agent.specialty] || agent.specialty)})</option>`)
+    .join('');
+}
+
 function getProjectName(project) {
   return typeof project === 'string' ? project : project?.name || '';
 }
@@ -374,6 +390,27 @@ function getTaskBoardTasks() {
 
 function getTaskById(taskId) {
   return (dashboard.tasks || []).find((task) => task.id === taskId) || null;
+}
+
+function getDependencyCandidates(task, { includeDone = false, restrictToProject = true, excludeIds = [] } = {}) {
+  const excluded = new Set([task?.id, ...(excludeIds || [])].filter(Boolean));
+  return (dashboard.tasks || [])
+    .filter((candidate) => candidate && !excluded.has(candidate.id))
+    .filter((candidate) => !restrictToProject || candidate.owner === task?.owner)
+    .filter((candidate) => includeDone || candidate.lane !== 'done')
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function populateBlockedByOptions(selectElement, task, selectedIds = []) {
+  const selected = new Set((selectedIds || []).filter(Boolean));
+  const options = getDependencyCandidates(task, { includeDone: true }).map(
+    (candidate) => `<option value="${candidate.id}" ${selected.has(candidate.id) ? 'selected' : ''}>${escapeHtml(candidate.title)} (${escapeHtml(candidate.lane)})</option>`
+  );
+  selectElement.innerHTML = options.length ? options.join('') : '<option value="" disabled>No eligible blocker tasks in this project</option>';
+}
+
+function getSelectedValues(selectElement) {
+  return [...(selectElement?.selectedOptions || [])].map((option) => option.value).filter(Boolean);
 }
 
 function getBlockingTasks(task) {
@@ -1485,6 +1522,7 @@ function syncTaskDetailForms(task) {
   const boardProject = getCurrentTaskBoardProject();
 
   populateAgentSelectOptions(taskEditAgent, task.preferredAgentId || '');
+  populateBlockedByOptions(taskEditBlockedBy, task, task.blockedBy || []);
   if (boardProject) {
     taskEditOwner.innerHTML = `<option value="${escapeHtml(boardProject.name)}">${escapeHtml(boardProject.name)}</option>`;
     taskEditOwner.value = boardProject.name;
@@ -1605,7 +1643,7 @@ function renderTaskDetail() {
   ].filter(Boolean).join('\n');
   taskDetailActions.innerHTML = buildTaskActions(task, { includeSecondary: true });
   taskEditSubmitButton.textContent = editLocked ? 'Locked while running' : 'Save changes';
-  [taskEditTitle, taskEditPriority, taskEditAgent, taskEditNotes, taskEditSubmitButton].forEach((element) => {
+  [taskEditTitle, taskEditPriority, taskEditAgent, taskEditNotes, taskEditBlockedBy, taskEditSubmitButton].forEach((element) => {
     element.disabled = editLocked;
   });
   taskEditOwner.disabled = editLocked || Boolean(boardProject);
@@ -1617,6 +1655,86 @@ function renderTaskDetail() {
   taskDetailDrawer.classList.add('open');
   taskDetailDrawer.setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawer-open');
+}
+
+function renderSplitTaskPlan(task, plan) {
+  splitTaskTitle.textContent = `Split ${task.title}`;
+  splitTaskSummary.textContent = 'Review the proposed child tasks, adjust agent ownership or dependency order if needed, then create them.';
+
+  splitTaskPlanList.innerHTML = plan
+    .map((entry, index) => {
+      const blockerOptions = plan
+        .filter((candidate) => candidate.tempId !== entry.tempId)
+        .map(
+          (candidate) => `<option value="${candidate.tempId}" ${(entry.blockedBy || []).includes(candidate.tempId) ? 'selected' : ''}>${escapeHtml(candidate.title)}</option>`
+        )
+        .join('');
+
+      return `
+        <article class="split-plan-card" data-split-plan-row data-temp-id="${entry.tempId}">
+          <div class="task-comments-header">
+            <strong>Child task ${index + 1}</strong>
+            <span class="pill neutral">${escapeHtml(entry.repoRole || 'implementation')}</span>
+          </div>
+          <div class="split-plan-grid">
+            <label class="modal-label wide">
+              Task title
+              <input type="text" data-split-title value="${escapeHtml(entry.title || '')}" />
+            </label>
+            <label class="modal-label">
+              Preferred agent
+              <select data-split-agent>
+                ${buildAgentOptions(entry.preferredAgentId || '')}
+              </select>
+            </label>
+            <label class="modal-label">
+              Repo role
+              <input type="text" data-split-role value="${escapeHtml(entry.repoRole || '')}" readonly />
+            </label>
+            <label class="modal-label wide">
+              Blocked by
+              <select data-split-blocked-by multiple size="4">
+                ${blockerOptions}
+              </select>
+              <small class="field-help">Use this to force execution order between the proposed child tasks.</small>
+            </label>
+            <label class="modal-label wide">
+              Notes
+              <textarea data-split-notes rows="5">${escapeHtml(entry.notes || '')}</textarea>
+            </label>
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+}
+
+function readSplitTaskPlan() {
+  return [...splitTaskPlanList.querySelectorAll('[data-split-plan-row]')].map((row) => ({
+    tempId: row.dataset.tempId,
+    title: row.querySelector('[data-split-title]')?.value?.trim() || '',
+    preferredAgentId: row.querySelector('[data-split-agent]')?.value?.trim() || '',
+    repoRole: row.querySelector('[data-split-role]')?.value?.trim() || '',
+    blockedBy: getSelectedValues(row.querySelector('[data-split-blocked-by]')),
+    notes: row.querySelector('[data-split-notes]')?.value?.trim() || '',
+  }));
+}
+
+async function openSplitTaskDialog(taskId) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    return;
+  }
+  const response = await api(`/api/tasks/${taskId}/split-plan`);
+  pendingSplitTaskId = taskId;
+  renderSplitTaskPlan(task, response.plan || []);
+  splitTaskDialog.showModal();
+}
+
+function closeSplitTaskDialog() {
+  pendingSplitTaskId = null;
+  splitTaskPlanList.innerHTML = '';
+  splitTaskDialog.close();
 }
 
 function renderAll() {
@@ -1754,11 +1872,7 @@ document.addEventListener('click', (event) => {
 
   const { action, taskId } = taskButton.dataset;
   if (action === 'split-task') {
-    const task = dashboard.tasks.find((item) => item.id === taskId);
-    if (!task) return;
-    const confirmed = window.confirm(`Split "${task.title}" into implementation subtasks for this project?`);
-    if (!confirmed) return;
-    mutate(() => api(`/api/tasks/${taskId}/split`, { method: 'POST' }));
+    openSplitTaskDialog(taskId).catch((error) => window.alert(error.message));
     return;
   }
   if (action === 'move-left') {
@@ -1890,6 +2004,7 @@ taskEditForm.addEventListener('submit', (event) => {
         priority: formData.get('priority'),
         agentId: formData.get('agentId'),
         owner: boardProject?.name || formData.get('owner'),
+        blockedBy: getSelectedValues(taskEditBlockedBy),
       }),
     });
     isTaskEditMode = false;
@@ -1999,6 +2114,28 @@ reassignConfirmButton.addEventListener('click', () => {
   pendingReassignTaskId = null;
   reassignDialog.close();
   mutate(() => api(`/api/tasks/${taskId}/reassign`, { method: 'POST', body: JSON.stringify({ agentId }) }));
+});
+
+splitTaskCancelButton.addEventListener('click', closeSplitTaskDialog);
+splitTaskDialog.addEventListener('close', () => {
+  pendingSplitTaskId = null;
+  splitTaskPlanList.innerHTML = '';
+});
+splitTaskConfirmButton.addEventListener('click', () => {
+  if (!pendingSplitTaskId) {
+    closeSplitTaskDialog();
+    return;
+  }
+
+  const taskId = pendingSplitTaskId;
+  const plan = readSplitTaskPlan();
+  mutate(async () => {
+    await api(`/api/tasks/${taskId}/split`, {
+      method: 'POST',
+      body: JSON.stringify({ plan }),
+    });
+    closeSplitTaskDialog();
+  });
 });
 
 newTaskButton.addEventListener('click', () => {

@@ -434,6 +434,11 @@
               Definition notes
               <textarea id="task-edit-notes" name="notes" rows="4"></textarea>
             </label>
+            <label class="wide">
+              Blocked by
+              <select id="task-edit-blocked-by" name="blockedBy" multiple size="5"></select>
+              <small class="field-help">Use Cmd/Ctrl click to select multiple blocker tasks. Only tasks from the same project can block this one.</small>
+            </label>
             <div class="form-actions wide">
               <button type="submit" class="button primary">Save changes</button>
             </div>
@@ -500,6 +505,25 @@
         <div class="topbar-actions">
           <button type="button" id="reassign-cancel-button" class="button ghost">Cancel</button>
           <button type="button" id="reassign-confirm-button" class="button primary">Reassign</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="split-task-dialog" class="modal-dialog">
+      <form method="dialog" class="modal-card split-dialog-card">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Split with Jarvis</p>
+            <h3 id="split-task-title">Review the proposed child tasks</h3>
+          </div>
+        </div>
+
+        <p id="split-task-summary" class="subtitle"></p>
+        <div id="split-task-plan-list" class="split-plan-list"></div>
+
+        <div class="topbar-actions">
+          <button type="button" id="split-task-cancel-button" class="button ghost">Cancel</button>
+          <button type="button" id="split-task-confirm-button" class="button primary">Create child tasks</button>
         </div>
       </form>
     </dialog>
