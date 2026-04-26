@@ -1671,13 +1671,18 @@ function normalizeProjectRepos(repos, fallbackRepoUrl = '') {
     });
   }
 
-  if (normalized.length && !normalized.some((repo) => repo.primary)) {
-    normalized[0].primary = true;
+  if (!normalized.length) {
+    return normalized;
+  }
+
+  let primaryIndex = normalized.findIndex((repo) => repo.primary);
+  if (primaryIndex === -1) {
+    primaryIndex = 0;
   }
 
   return normalized.map(({ order, ...repo }, index) => ({
     ...repo,
-    primary: repo.primary || (!normalized.some((item) => item.primary && item.id !== repo.id) && index === 0),
+    primary: index === primaryIndex,
   }));
 }
 
