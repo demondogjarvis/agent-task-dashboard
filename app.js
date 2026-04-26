@@ -354,6 +354,14 @@ function getProjectReviewServices(project) {
   return typeof project === 'string' ? [] : Array.isArray(project?.reviewServices) ? project.reviewServices.filter(Boolean) : [];
 }
 
+function getProjectByName(name) {
+  return (dashboard.projects || []).find((project) => getProjectName(project) === name) || null;
+}
+
+function getProjectForTask(task) {
+  return getProjectByName(task?.owner || '');
+}
+
 function getTasksForProject(project) {
   const projectName = typeof project === 'string' ? project : project?.name;
   return dashboard.tasks.filter((task) => task.owner === projectName);
@@ -660,7 +668,7 @@ function renderStats() {
   runningAgentsPill.textContent = `${metrics.busyAgentCount} running`;
   tokenTotalPill.textContent = `${metrics.totalSessionTokens.toLocaleString()} tokens`;
   sessionCountPill.textContent = `${openclaw.sessions.length} sessions`;
-  backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length} tracked`;
+  backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length + (dashboard.reviewEnvironments?.length || 0)} tracked`;
   historyCountPill.textContent = `${metrics.doneCount} completed`;
   runCountPill.textContent = `${dashboard.runs.length} runs`;
   agentCountPill.textContent = `${dashboard.agents.length} agents`;
@@ -671,6 +679,10 @@ function buildTaskActions(task, options = {}) {
   const actions = [];
   const laneIndex = dashboard.lanes.findIndex((lane) => lane.id === task.lane);
   const isRunning = task.runStatus === 'running';
+  const project = getProjectForTask(task);
+  const reviewServices = getProjectReviewServices(project);
+  const reviewEnvironment = task.reviewEnvironment || null;
+  const reviewLabel = reviewEnvironment?.status === 'failed' ? 'Retry service' : 'Start service';
 
   if (!isRunning && laneIndex > 0) {
     actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="move-left" data-task-id="${task.id}">Back</button>`);
@@ -681,6 +693,14 @@ function buildTaskActions(task, options = {}) {
   } else if (task.lane === 'ready') {
     actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="assign" data-task-id="${task.id}">Assign</button>`);
   } else if (task.lane === 'review') {
+    if (reviewEnvironment?.openUrl && reviewEnvironment.status !== 'stopping') {
+      actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="open-review" data-task-id="${task.id}">Open service</button>`);
+    }
+    if (reviewEnvironment && ['starting', 'ready', 'stopping'].includes(reviewEnvironment.status)) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="stop-review" data-task-id="${task.id}">${reviewEnvironment.status === 'stopping' ? 'Stopping…' : 'Stop service'}</button>`);
+    } else if (reviewServices.length) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="start-review" data-task-id="${task.id}">${reviewLabel}</button>`);
+    }
     actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
   } else if (!isRunning && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
     actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Next</button>`);

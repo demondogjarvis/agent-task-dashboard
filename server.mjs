@@ -87,6 +87,7 @@ const mimeTypes = {
 };
 
 const activeRuns = new Map();
+const reviewSessions = new Map();
 let state = await loadOrCreateState();
 const runLogger = createRunLogger({ dbPath: RUNS_DB_PATH });
 let restartPending = false;
@@ -143,10 +144,18 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    if (activeRuns.size > 0) {
+    const activeReviewCount = countActiveReviewSessions();
+    if (activeRuns.size > 0 || activeReviewCount > 0) {
+      const parts = [];
+      if (activeRuns.size > 0) {
+        parts.push(`${activeRuns.size} task run${activeRuns.size === 1 ? '' : 's'}`);
+      }
+      if (activeReviewCount > 0) {
+        parts.push(`${activeReviewCount} review environment${activeReviewCount === 1 ? '' : 's'}`);
+      }
       sendJson(res, 409, {
         error: 'restart_blocked',
-        message: `Cannot restart while ${activeRuns.size} task run${activeRuns.size === 1 ? '' : 's'} ${activeRuns.size === 1 ? 'is' : 'are'} active.`,
+        message: `Cannot restart while ${parts.join(' and ')} ${parts.length === 1 ? 'is' : 'are'} active.`,
       });
       return;
     }
@@ -344,6 +353,30 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  const reviewRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/review\/(start|stop)$/);
+  if (reviewRoute && req.method === 'POST') {
+    const [, taskId, reviewAction] = reviewRoute;
+    const task = state.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      sendJson(res, 404, { error: 'not_found', message: 'Task not found.' });
+      return;
+    }
+
+    if (reviewAction === 'start') {
+      try {
+        const reviewEnvironment = await startTaskReviewEnvironment(task);
+        sendJson(res, 202, { ok: true, reviewEnvironment });
+      } catch (error) {
+        sendJson(res, 400, { error: 'review_start_failed', message: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    await stopTaskReviewEnvironment(task.id, { quiet: false });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|assign|reassign|update|comment|delete)$/);
   if (!taskRoute) {
     sendJson(res, 404, { error: 'not_found' });
@@ -435,6 +468,7 @@ async function handleApi(req, res, url) {
     task.updatedAt = Date.now();
 
     if (['ready', 'inprogress', 'review'].includes(task.lane)) {
+      await stopTaskReviewEnvironment(task.id, { quiet: true });
       task.lane = 'ready';
       task.assignedAgentId = null;
       task.runStatus = 'idle';
@@ -514,6 +548,7 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    await stopTaskReviewEnvironment(task.id, { quiet: true });
     state.tasks = state.tasks.filter((item) => item.id !== task.id);
     pushActivity(`${task.title} was deleted from the board.`, 'warning');
     await persistState();
@@ -546,6 +581,7 @@ async function moveTask(task, direction) {
   }
 
   if (task.lane === 'review' && nextLane === 'done') {
+    await stopTaskReviewEnvironment(task.id, { quiet: true });
     const publish = await publishTaskProjectChanges(task);
     if (!publish.ok) {
       return publish;
@@ -555,6 +591,10 @@ async function moveTask(task, direction) {
     task.updatedAt = Date.now();
     pushActivity(`${task.title} marked Done after review.${publish.message ? ` ${publish.message}` : ''}`, 'info');
     return { ok: true, publish };
+  }
+
+  if (task.lane === 'review' && nextLane !== 'review') {
+    await stopTaskReviewEnvironment(task.id, { quiet: true });
   }
 
   if (task.lane === 'inprogress' && direction < 0) {
@@ -1131,6 +1171,459 @@ async function ensureBaseRepoClone(project) {
   return { repoDir, primaryRepo };
 }
 
+function getProjectRepoByRole(project, role) {
+  const repos = getProjectRepos(project);
+  if (!repos.length) {
+    return null;
+  }
+
+  const wanted = String(role || '').trim().toLowerCase();
+  if (!wanted) {
+    return getProjectPrimaryRepo(project);
+  }
+
+  return repos.find((repo) => String(repo.role || '').trim().toLowerCase() === wanted)
+    || repos.find((repo) => String(repo.label || '').trim().toLowerCase() === wanted)
+    || getProjectPrimaryRepo(project);
+}
+
+async function ensureProjectRepoClone(project, repo) {
+  const targetRepo = repo || getProjectPrimaryRepo(project);
+  if (!targetRepo?.url) {
+    throw new Error(`Project ${project?.name || 'unknown'} has no repository configured for this service.`);
+  }
+
+  let repoDir = await findExistingRepoClone(targetRepo.url);
+
+  if (!repoDir) {
+    repoDir = deriveRepoClonePath(targetRepo.url);
+    await runCommand(GIT_BIN, ['clone', targetRepo.url, repoDir], { cwd: GITHUB_REPOS_DIR });
+  } else {
+    await runCommand(GIT_BIN, ['fetch', 'origin', '--prune'], { cwd: repoDir }).catch(() => {});
+  }
+
+  return { repoDir, repo: targetRepo };
+}
+
+function countActiveReviewSessions() {
+  return Array.from(reviewSessions.values()).filter((session) => ['starting', 'ready', 'stopping'].includes(session?.status)).length;
+}
+
+function appendReviewServiceLog(service, chunk, stream = 'stdout') {
+  const lines = String(chunk || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => (stream === 'stderr' ? `! ${line}` : line));
+
+  if (!lines.length) {
+    return;
+  }
+
+  service.logLines = Array.isArray(service.logLines) ? service.logLines : [];
+  service.logLines.push(...lines);
+  if (service.logLines.length > 40) {
+    service.logLines = service.logLines.slice(-40);
+  }
+  service.lastLogAt = Date.now();
+}
+
+function buildReviewSessionMessage(session) {
+  if (!session) return '';
+  const services = Array.isArray(session.services) ? session.services : [];
+  const total = services.length;
+  const readyCount = services.filter((service) => service.status === 'ready').length;
+  const failedService = services.find((service) => service.status === 'failed');
+  const openUrl = services.find((service) => service.localUrl && service.status === 'ready')?.localUrl || services.find((service) => service.localUrl)?.localUrl || null;
+
+  if (session.status === 'failed') {
+    return failedService?.error
+      ? `${failedService.name || 'Service'} failed: ${failedService.error}`
+      : 'Review service startup failed.';
+  }
+
+  if (session.status === 'stopping') {
+    return 'Stopping review services…';
+  }
+
+  if (session.status === 'ready') {
+    return `${readyCount}/${total} review service${total === 1 ? '' : 's'} ready${openUrl ? ` at ${openUrl}` : ''}.`;
+  }
+
+  return `${readyCount}/${total} review service${total === 1 ? '' : 's'} ready, starting the rest…`;
+}
+
+function summarizeReviewSession(session) {
+  if (!session) {
+    return null;
+  }
+
+  const services = Array.isArray(session.services) ? session.services : [];
+  const openUrl = services.find((service) => service.localUrl && service.status === 'ready')?.localUrl || services.find((service) => service.localUrl)?.localUrl || null;
+  return {
+    status: session.status,
+    startedAt: session.startedAt,
+    updatedAt: session.updatedAt,
+    message: buildReviewSessionMessage(session),
+    openUrl,
+    services: services.map((service) => ({
+      id: service.id,
+      name: service.name,
+      status: service.status,
+      repoRole: service.repoRole,
+      repoUrl: service.repoUrl,
+      cwd: service.cwd,
+      localUrl: service.localUrl,
+      healthcheckUrl: service.healthcheckUrl,
+      pid: service.pid,
+      error: service.error || null,
+      logTail: Array.isArray(service.logLines) ? service.logLines.slice(-6) : [],
+    })),
+  };
+}
+
+async function probeServiceUrl(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(url, { method: 'GET', signal: controller.signal });
+    return response.status < 500;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resolveReviewServiceWorkspace(task, project, service) {
+  const repo = getProjectRepoByRole(project, service.repoRole);
+  if (!repo?.url) {
+    throw new Error(`No repository is configured for review service ${service.name || 'unnamed service'}.`);
+  }
+
+  const primaryRepo = getProjectPrimaryRepo(project);
+  const taskWorktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
+  let repoDir = null;
+
+  if (primaryRepo?.url && normalizeRepoUrl(primaryRepo.url) === normalizeRepoUrl(repo.url) && await pathExists(path.join(taskWorktreeDir, '.git'))) {
+    repoDir = taskWorktreeDir;
+  }
+
+  if (!repoDir) {
+    repoDir = (await ensureProjectRepoClone(project, repo)).repoDir;
+  }
+
+  const requestedDir = String(service.workingDirectory || '').trim();
+  const cwd = requestedDir ? path.resolve(repoDir, requestedDir) : repoDir;
+  if (!cwd.startsWith(repoDir)) {
+    throw new Error(`Review service ${service.name || 'unnamed service'} has an invalid working directory.`);
+  }
+  if (!(await pathExists(cwd))) {
+    throw new Error(`Working directory not found for ${service.name || 'unnamed service'}: ${cwd}`);
+  }
+
+  return { repo, repoDir, cwd };
+}
+
+function refreshReviewSessionStatus(task, session) {
+  if (!session) {
+    return;
+  }
+
+  if (session.stopRequested && session.status !== 'failed') {
+    session.status = 'stopping';
+    session.updatedAt = Date.now();
+    return;
+  }
+
+  if (session.status === 'failed') {
+    session.updatedAt = Date.now();
+    return;
+  }
+
+  const services = Array.isArray(session.services) ? session.services : [];
+  const failed = services.some((service) => service.status === 'failed');
+  const allReady = services.length > 0 && services.every((service) => service.status === 'ready');
+
+  if (failed) {
+    session.status = 'failed';
+  } else if (allReady) {
+    session.status = 'ready';
+    if (!session.readyAnnouncedAt) {
+      session.readyAnnouncedAt = Date.now();
+      pushActivity(`Review environment ready for ${task.title}.`, 'info');
+    }
+  } else {
+    session.status = 'starting';
+  }
+
+  session.updatedAt = Date.now();
+}
+
+async function stopReviewServiceProcess(service) {
+  const child = service?.process;
+  if (!child) {
+    return;
+  }
+
+  if (service.exitPromise) {
+    await service.exitPromise;
+    return;
+  }
+
+  if (!['failed', 'stopped'].includes(service.status)) {
+    service.status = 'stopping';
+  }
+
+  service.exitPromise = new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(forceTimer);
+      clearTimeout(safetyTimer);
+      resolve();
+    };
+
+    const forceTimer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {}
+    }, 4000);
+
+    const safetyTimer = setTimeout(finish, 5500);
+    child.once('close', finish);
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      finish();
+    }
+  });
+
+  await service.exitPromise;
+}
+
+async function stopTaskReviewEnvironment(taskId, options = {}) {
+  const { quiet = false, preserveFailure = false } = options;
+  const session = reviewSessions.get(taskId);
+  if (!session) {
+    return false;
+  }
+
+  session.stopRequested = true;
+  if (session.status !== 'failed') {
+    session.status = 'stopping';
+  }
+  session.updatedAt = Date.now();
+
+  await Promise.all(
+    (session.services || []).map(async (service) => {
+      if (!service?.process || ['failed', 'stopped'].includes(service.status)) {
+        return;
+      }
+      await stopReviewServiceProcess(service);
+    })
+  );
+
+  session.updatedAt = Date.now();
+
+  if (!(preserveFailure && session.status === 'failed')) {
+    reviewSessions.delete(taskId);
+    if (!quiet) {
+      pushActivity(`Review environment stopped for ${session.taskTitle}.`, 'info');
+    }
+  }
+
+  return true;
+}
+
+async function monitorReviewService(task, session, service) {
+  const probeUrl = service.healthcheckUrl || service.localUrl || '';
+  const deadline = Date.now() + (probeUrl ? 60000 : 1500);
+
+  while (reviewSessions.get(task.id) === session && !session.stopRequested && service.status === 'starting') {
+    if (probeUrl) {
+      if (await probeServiceUrl(probeUrl)) {
+        service.status = 'ready';
+        service.readyAt = Date.now();
+        refreshReviewSessionStatus(task, session);
+        return;
+      }
+    } else if (Date.now() >= deadline) {
+      service.status = 'ready';
+      service.readyAt = Date.now();
+      refreshReviewSessionStatus(task, session);
+      return;
+    }
+
+    if (Date.now() >= deadline) {
+      service.status = 'failed';
+      service.error = probeUrl
+        ? `Timed out waiting for ${probeUrl}`
+        : 'Service did not become ready.';
+      session.status = 'failed';
+      session.updatedAt = Date.now();
+      pushActivity(`Review environment failed for ${task.title}. ${service.name} did not become ready.`, 'warning');
+      await stopTaskReviewEnvironment(task.id, { quiet: true, preserveFailure: true });
+      return;
+    }
+
+    await wait(1000);
+  }
+}
+
+async function startTaskReviewEnvironment(task) {
+  if (task.lane !== 'review') {
+    throw new Error('Only Review tasks can start services.');
+  }
+
+  if (activeRuns.has(task.id) || task.runStatus === 'running') {
+    throw new Error('Wait for the task run to finish before starting review services.');
+  }
+
+  const existing = reviewSessions.get(task.id);
+  if (existing && ['starting', 'ready', 'stopping'].includes(existing.status)) {
+    throw new Error('Review services are already active for this task.');
+  }
+
+  const project = state.projects.find((item) => item.name === task.owner) || null;
+  if (!project) {
+    throw new Error('This task does not have a linked project.');
+  }
+
+  const configuredServices = normalizeProjectReviewServices(project.reviewServices);
+  if (!configuredServices.length) {
+    throw new Error(`Project ${project.name} has no review services configured yet.`);
+  }
+
+  const invalid = configuredServices.find((service) => !service.startCommand);
+  if (invalid) {
+    throw new Error(`Review service ${invalid.name || 'unnamed service'} is missing a start command.`);
+  }
+
+  const session = {
+    taskId: task.id,
+    taskTitle: task.title,
+    projectName: project.name,
+    status: 'starting',
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    stopRequested: false,
+    services: [],
+  };
+  reviewSessions.set(task.id, session);
+  pushActivity(`Starting review environment for ${task.title}.`, 'busy');
+
+  try {
+    for (const configuredService of configuredServices) {
+      const workspace = await resolveReviewServiceWorkspace(task, project, configuredService);
+      const child = spawn('sh', ['-lc', configuredService.startCommand], {
+        cwd: workspace.cwd,
+        env: {
+          ...process.env,
+          PATH: process.env.PATH || '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+          REVIEW_TASK_ID: task.id,
+          REVIEW_PROJECT_NAME: project.name,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      const service = {
+        id: configuredService.id,
+        name: configuredService.name || configuredService.repoRole || 'Review service',
+        status: 'starting',
+        repoRole: configuredService.repoRole,
+        repoUrl: workspace.repo.url,
+        cwd: workspace.cwd,
+        startCommand: configuredService.startCommand,
+        localUrl: configuredService.localUrl,
+        healthcheckUrl: configuredService.healthcheckUrl,
+        pid: child.pid,
+        startedAt: Date.now(),
+        logLines: [],
+        error: null,
+        process: child,
+        exitPromise: null,
+      };
+
+      child.stdout.on('data', (chunk) => {
+        appendReviewServiceLog(service, chunk, 'stdout');
+        session.updatedAt = Date.now();
+      });
+
+      child.stderr.on('data', (chunk) => {
+        appendReviewServiceLog(service, chunk, 'stderr');
+        session.updatedAt = Date.now();
+      });
+
+      child.on('error', (error) => {
+        service.error = error instanceof Error ? error.message : String(error);
+        service.status = 'failed';
+        session.status = 'failed';
+        session.updatedAt = Date.now();
+        pushActivity(`Review environment failed for ${task.title}. ${service.name} could not start.`, 'warning');
+        stopTaskReviewEnvironment(task.id, { quiet: true, preserveFailure: true }).catch(() => {});
+      });
+
+      child.on('close', (code, signal) => {
+        service.process = null;
+        service.endedAt = Date.now();
+        if (service.status === 'stopping') {
+          service.status = 'stopped';
+        } else if (service.status !== 'failed') {
+          const unexpected = !session.stopRequested;
+          if (unexpected) {
+            service.status = 'failed';
+            service.error = `Exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}`;
+            session.status = 'failed';
+            pushActivity(`Review environment failed for ${task.title}. ${service.name} exited unexpectedly.`, 'warning');
+            stopTaskReviewEnvironment(task.id, { quiet: true, preserveFailure: true }).catch(() => {});
+          } else {
+            service.status = 'stopped';
+          }
+        }
+        refreshReviewSessionStatus(task, session);
+      });
+
+      session.services.push(service);
+      monitorReviewService(task, session, service).catch(() => {});
+    }
+  } catch (error) {
+    session.status = 'failed';
+    session.updatedAt = Date.now();
+    const message = error instanceof Error ? error.message : String(error);
+    const failedService = {
+      id: nextId('service'),
+      name: 'Review setup',
+      status: 'failed',
+      repoRole: '',
+      repoUrl: '',
+      cwd: '',
+      startCommand: '',
+      localUrl: '',
+      healthcheckUrl: '',
+      pid: null,
+      startedAt: Date.now(),
+      logLines: [],
+      error: message,
+      process: null,
+      exitPromise: null,
+    };
+    if (!session.services.some((service) => service.status === 'failed')) {
+      session.services.push(failedService);
+    }
+    await stopTaskReviewEnvironment(task.id, { quiet: true, preserveFailure: true });
+    throw error;
+  }
+
+  refreshReviewSessionStatus(task, session);
+  return summarizeReviewSession(session);
+}
+
 async function resolveDefaultBranch(repoDir) {
 
   try {
@@ -1371,6 +1864,7 @@ async function buildDashboardPayload() {
       .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0))
       .map((task) => {
         const activeRun = activeRunByTaskId.get(task.id) || null;
+        const reviewEnvironment = summarizeReviewSession(reviewSessions.get(task.id) || null);
         return {
           ...task,
           liveStatus: activeRun
@@ -1379,6 +1873,7 @@ async function buildDashboardPayload() {
                 startedAt: activeRun.startedAt,
               }
             : null,
+          reviewEnvironment,
         };
       }),
     activity: state.activity.slice(0, 20),
@@ -1392,6 +1887,10 @@ async function buildDashboardPayload() {
       startedAt: run.startedAt,
       summary: buildLiveRunStatus(state.tasks.find((task) => task.id === run.taskId) || null, run),
     })),
+    reviewEnvironments: Array.from(reviewSessions.values()).map((session) => ({
+      taskId: session.taskId,
+      ...summarizeReviewSession(session),
+    })),
     runs: runLogger.getRecentRuns(80),
     systemHistory: {
       tasks: systemHistoryTasks,
@@ -1403,6 +1902,7 @@ async function buildDashboardPayload() {
       approvalCount: state.tasks.filter((task) => task.lane === 'approval').length,
       busyAgentCount: mergedAgents.filter((agent) => agent.status === 'busy').length,
       doneCount: state.tasks.filter((task) => task.lane === 'done').length,
+      reviewEnvironmentCount: countActiveReviewSessions(),
       totalSessionTokens,
       systemTaskCount: systemHistoryTasks.length,
       systemSessionCount: systemHistorySessions.length,
