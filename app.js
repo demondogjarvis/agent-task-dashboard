@@ -107,7 +107,10 @@ const taskBoardContextPill = document.getElementById('task-board-context-pill');
 const projectFormModePill = document.getElementById('project-form-mode-pill');
 const projectForm = document.getElementById('project-form');
 const projectNameInput = document.getElementById('project-name');
-const projectRepoUrlInput = document.getElementById('project-repo-url');
+const projectRepoList = document.getElementById('project-repo-list');
+const addProjectRepoButton = document.getElementById('add-project-repo-button');
+const projectServiceList = document.getElementById('project-service-list');
+const addProjectServiceButton = document.getElementById('add-project-service-button');
 const projectNotesInput = document.getElementById('project-notes');
 const projectGitWorkflowSelect = document.getElementById('project-git-workflow');
 const projectSubmitButton = document.getElementById('project-submit-button');
@@ -317,8 +320,38 @@ function getProjectName(project) {
   return typeof project === 'string' ? project : project?.name || '';
 }
 
+function getProjectRepos(project) {
+  if (typeof project === 'string') {
+    return [];
+  }
+  const repos = Array.isArray(project?.repos) ? project.repos : [];
+  if (repos.length) {
+    return repos.filter(Boolean);
+  }
+  return project?.repoUrl
+    ? [
+        {
+          id: 'repo-legacy',
+          label: 'Primary repo',
+          role: 'app',
+          url: project.repoUrl,
+          primary: true,
+        },
+      ]
+    : [];
+}
+
+function getProjectPrimaryRepo(project) {
+  const repos = getProjectRepos(project);
+  return repos.find((repo) => repo.primary) || repos[0] || null;
+}
+
 function getProjectRepoUrl(project) {
-  return typeof project === 'string' ? '' : project?.repoUrl || '';
+  return getProjectPrimaryRepo(project)?.url || '';
+}
+
+function getProjectReviewServices(project) {
+  return typeof project === 'string' ? [] : Array.isArray(project?.reviewServices) ? project.reviewServices.filter(Boolean) : [];
 }
 
 function getTasksForProject(project) {
@@ -1082,6 +1115,137 @@ function getProjectTaskCount(projectName) {
   return dashboard.tasks.filter((task) => task.owner === projectName).length;
 }
 
+function createEmptyProjectRepo() {
+  return {
+    id: `repo-${Math.random().toString(36).slice(2, 8)}`,
+    label: '',
+    role: '',
+    url: '',
+    primary: false,
+  };
+}
+
+function createEmptyProjectService() {
+  return {
+    id: `svc-${Math.random().toString(36).slice(2, 8)}`,
+    name: '',
+    repoRole: '',
+    workingDirectory: '',
+    startCommand: '',
+    localUrl: '',
+    healthcheckUrl: '',
+  };
+}
+
+function renderProjectRepoFields(entries = []) {
+  const repos = entries.length ? entries : [createEmptyProjectRepo()];
+  const primaryIndex = Math.max(0, repos.findIndex((repo) => repo.primary));
+
+  projectRepoList.innerHTML = repos
+    .map(
+      (repo, index) => `
+        <article class="project-config-card" data-project-repo-row data-project-repo-id="${escapeHtml(repo.id || '')}">
+          <div class="project-config-card-header">
+            <strong>Repo ${index + 1}</strong>
+            <button type="button" class="button ghost danger compact-action" data-project-repo-remove="${index}">Remove</button>
+          </div>
+          <div class="project-config-grid">
+            <label>
+              Label
+              <input type="text" data-project-repo-label value="${escapeHtml(repo.label || '')}" placeholder="Web app" />
+            </label>
+            <label>
+              Role tag
+              <input type="text" data-project-repo-role value="${escapeHtml(repo.role || '')}" placeholder="frontend, backend, service" />
+            </label>
+            <label class="wide">
+              Repository URL
+              <input type="text" data-project-repo-url value="${escapeHtml(repo.url || '')}" placeholder="https://github.com/acme/project" />
+            </label>
+            <label class="project-config-inline">
+              <input type="radio" name="project-primary-repo" value="${index}" ${index === primaryIndex ? 'checked' : ''} />
+              Use this repo for task code changes by default
+            </label>
+          </div>
+        </article>
+      `
+    )
+    .join('');
+}
+
+function renderProjectServiceFields(entries = []) {
+  const services = entries.length ? entries : [];
+  projectServiceList.innerHTML = services.length
+    ? services
+        .map(
+          (service, index) => `
+            <article class="project-config-card" data-project-service-row data-project-service-id="${escapeHtml(service.id || '')}">
+              <div class="project-config-card-header">
+                <strong>Service ${index + 1}</strong>
+                <button type="button" class="button ghost danger compact-action" data-project-service-remove="${index}">Remove</button>
+              </div>
+              <div class="project-config-grid">
+                <label>
+                  Service name
+                  <input type="text" data-project-service-name value="${escapeHtml(service.name || '')}" placeholder="Frontend app" />
+                </label>
+                <label>
+                  Repo role tag
+                  <input type="text" data-project-service-repo-role value="${escapeHtml(service.repoRole || '')}" placeholder="frontend" />
+                </label>
+                <label>
+                  Working directory
+                  <input type="text" data-project-service-working-directory value="${escapeHtml(service.workingDirectory || '')}" placeholder="apps/web" />
+                </label>
+                <label>
+                  Start command
+                  <input type="text" data-project-service-start-command value="${escapeHtml(service.startCommand || '')}" placeholder="npm run dev" />
+                </label>
+                <label>
+                  Local URL
+                  <input type="text" data-project-service-local-url value="${escapeHtml(service.localUrl || '')}" placeholder="http://localhost:5173" />
+                </label>
+                <label>
+                  Healthcheck URL
+                  <input type="text" data-project-service-healthcheck-url value="${escapeHtml(service.healthcheckUrl || '')}" placeholder="http://localhost:5173/health" />
+                </label>
+              </div>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No review services configured yet. Add one when you want start/open/stop review controls later.</div>';
+}
+
+function readProjectRepoFields() {
+  const rows = [...projectRepoList.querySelectorAll('[data-project-repo-row]')];
+  const primaryIndex = Number(projectRepoList.querySelector('input[name="project-primary-repo"]:checked')?.value ?? 0);
+  return rows
+    .map((row, index) => ({
+      id: row.dataset.projectRepoId || `repo-${index}`,
+      label: row.querySelector('[data-project-repo-label]')?.value?.trim() || '',
+      role: row.querySelector('[data-project-repo-role]')?.value?.trim() || '',
+      url: row.querySelector('[data-project-repo-url]')?.value?.trim() || '',
+      primary: index === primaryIndex,
+    }))
+    .filter((repo) => repo.label || repo.role || repo.url);
+}
+
+function readProjectServiceFields() {
+  const rows = [...projectServiceList.querySelectorAll('[data-project-service-row]')];
+  return rows
+    .map((row, index) => ({
+      id: row.dataset.projectServiceId || `svc-${index}`,
+      name: row.querySelector('[data-project-service-name]')?.value?.trim() || '',
+      repoRole: row.querySelector('[data-project-service-repo-role]')?.value?.trim() || '',
+      workingDirectory: row.querySelector('[data-project-service-working-directory]')?.value?.trim() || '',
+      startCommand: row.querySelector('[data-project-service-start-command]')?.value?.trim() || '',
+      localUrl: row.querySelector('[data-project-service-local-url]')?.value?.trim() || '',
+      healthcheckUrl: row.querySelector('[data-project-service-healthcheck-url]')?.value?.trim() || '',
+    }))
+    .filter((service) => service.name || service.repoRole || service.workingDirectory || service.startCommand || service.localUrl || service.healthcheckUrl);
+}
+
 function openTaskBoard(projectId) {
   window.location.hash = `tasks/${projectId}`;
 }
@@ -1145,6 +1309,8 @@ function syncProjectFormMode() {
 function clearProjectForm() {
   selectedProjectId = null;
   projectForm.reset();
+  renderProjectRepoFields([createEmptyProjectRepo()]);
+  renderProjectServiceFields([]);
   syncProjectFormMode();
 }
 
@@ -1154,7 +1320,8 @@ function openProjectEdit(projectId) {
 
   selectedProjectId = project.id;
   projectNameInput.value = project.name || '';
-  projectRepoUrlInput.value = project.repoUrl || '';
+  renderProjectRepoFields(getProjectRepos(project));
+  renderProjectServiceFields(getProjectReviewServices(project));
   projectGitWorkflowSelect.value = getProjectGitWorkflow(project);
   projectNotesInput.value = project.notes || '';
   syncProjectFormMode();
@@ -1168,25 +1335,30 @@ function renderProjects() {
 
   projectCountPill.textContent = `${projects.length} project${projects.length === 1 ? '' : 's'}`;
   projectSummary.textContent = projects.length
-    ? `${projects.length} linked project${projects.length === 1 ? '' : 's'} available for task creation and task editing.`
-    : 'No projects yet. Add the first GitHub repo to populate the task dropdown.';
+    ? `${projects.length} linked project${projects.length === 1 ? '' : 's'} with repo maps and review run config available for task boards.`
+    : 'No projects yet. Add the first project with at least one GitHub repo to populate the task boards.';
 
   projectList.innerHTML = projects.length
     ? projects
         .map((project) => {
           const taskCount = getProjectTaskCount(getProjectName(project));
+          const primaryRepo = getProjectPrimaryRepo(project);
+          const repoCount = getProjectRepos(project).length;
+          const reviewServiceCount = getProjectReviewServices(project).length;
           return `
             <article class="project-card">
               <div class="project-card-header">
                 <div>
                   <h3>${escapeHtml(getProjectName(project))}</h3>
-                  <p><a href="${escapeHtml(getProjectRepoUrl(project))}" target="_blank" rel="noreferrer">${escapeHtml(getProjectRepoUrl(project))}</a></p>
+                  <p>${primaryRepo ? `<a href="${escapeHtml(primaryRepo.url)}" target="_blank" rel="noreferrer">${escapeHtml(primaryRepo.label || primaryRepo.role || primaryRepo.url)}</a>` : 'No primary repo configured yet.'}</p>
                 </div>
                 <span class="pill neutral">${taskCount} task${taskCount === 1 ? '' : 's'}</span>
               </div>
               <p>${escapeHtml(project.notes || 'No notes added yet.')}</p>
               <div class="task-meta">
                 <span class="tag">${escapeHtml(getProjectWorkflowLabel(project))}</span>
+                <span class="tag">${repoCount} repo${repoCount === 1 ? '' : 's'}</span>
+                <span class="tag">${reviewServiceCount} review service${reviewServiceCount === 1 ? '' : 's'}</span>
               </div>
               <div class="task-actions">
                 <button type="button" class="button primary" data-project-action="open-board" data-project-id="${project.id}">Open board</button>
@@ -1414,6 +1586,36 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  const addRepoButton = event.target.closest('#add-project-repo-button');
+  if (addRepoButton) {
+    const repos = readProjectRepoFields();
+    renderProjectRepoFields([...repos, createEmptyProjectRepo()]);
+    return;
+  }
+
+  const removeRepoButton = event.target.closest('button[data-project-repo-remove]');
+  if (removeRepoButton) {
+    const repos = readProjectRepoFields();
+    repos.splice(Number(removeRepoButton.dataset.projectRepoRemove), 1);
+    renderProjectRepoFields(repos.length ? repos : [createEmptyProjectRepo()]);
+    return;
+  }
+
+  const addServiceButton = event.target.closest('#add-project-service-button');
+  if (addServiceButton) {
+    const services = readProjectServiceFields();
+    renderProjectServiceFields([...services, createEmptyProjectService()]);
+    return;
+  }
+
+  const removeServiceButton = event.target.closest('button[data-project-service-remove]');
+  if (removeServiceButton) {
+    const services = readProjectServiceFields();
+    services.splice(Number(removeServiceButton.dataset.projectServiceRemove), 1);
+    renderProjectServiceFields(services);
+    return;
+  }
+
   const projectButton = event.target.closest('button[data-project-id]');
   if (projectButton) {
     const { projectAction, projectId } = projectButton.dataset;
@@ -1488,9 +1690,16 @@ taskForm.addEventListener('submit', (event) => {
 projectForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const formData = new FormData(projectForm);
+  const repos = readProjectRepoFields();
+  if (!repos.length || !repos.some((repo) => repo.url)) {
+    window.alert('Add at least one repository URL for the project.');
+    return;
+  }
+
   const payload = {
     name: formData.get('name'),
-    repoUrl: formData.get('repoUrl'),
+    repos,
+    reviewServices: readProjectServiceFields(),
     gitWorkflow: formData.get('gitWorkflow'),
     notes: formData.get('notes'),
   };
@@ -1678,6 +1887,7 @@ window.addEventListener('hashchange', () => {
 });
 
 initTheme();
+clearProjectForm();
 
 async function bootstrap() {
   applyView();

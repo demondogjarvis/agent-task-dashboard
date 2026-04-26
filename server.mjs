@@ -174,8 +174,10 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/projects') {
     const body = await readJsonBody(req);
     const name = String(body.name || '').trim();
-    const repoUrl = String(body.repoUrl || '').trim();
+    const repos = normalizeProjectRepos(body.repos, body.repoUrl);
+    const repoUrl = getProjectRepoUrl({ repos, repoUrl: body.repoUrl });
     const gitWorkflow = normalizeProjectWorkflow(body.gitWorkflow);
+    const reviewServices = normalizeProjectReviewServices(body.reviewServices);
     const notes = String(body.notes || '').trim();
 
     if (!name) {
@@ -197,7 +199,9 @@ async function handleApi(req, res, url) {
       id: nextId('project'),
       name,
       repoUrl,
+      repos,
       gitWorkflow,
+      reviewServices,
       notes,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -221,8 +225,10 @@ async function handleApi(req, res, url) {
 
     const body = await readJsonBody(req);
     const nextName = String(body.name || '').trim();
-    const nextRepoUrl = String(body.repoUrl || '').trim();
+    const nextRepos = normalizeProjectRepos(body.repos, body.repoUrl);
+    const nextRepoUrl = getProjectRepoUrl({ repos: nextRepos, repoUrl: body.repoUrl });
     const nextGitWorkflow = normalizeProjectWorkflow(body.gitWorkflow);
+    const nextReviewServices = normalizeProjectReviewServices(body.reviewServices);
     const nextNotes = String(body.notes || '').trim();
 
     if (!nextName) {
@@ -246,7 +252,9 @@ async function handleApi(req, res, url) {
     const previousName = project.name;
     project.name = nextName;
     project.repoUrl = nextRepoUrl;
+    project.repos = nextRepos;
     project.gitWorkflow = nextGitWorkflow;
+    project.reviewServices = nextReviewServices;
     project.notes = nextNotes;
     project.updatedAt = Date.now();
 
@@ -648,7 +656,7 @@ async function launchTaskRun(task, agent) {
       pid: child.pid,
       cwd: executionContext.cwd,
       projectName: executionContext.project?.name || null,
-      repoUrl: executionContext.project?.repoUrl || null,
+      repoUrl: executionContext.primaryRepo?.url || executionContext.project?.repoUrl || null,
       repoDir: executionContext.repoDir || null,
       branchName: executionContext.branchName || null,
     },
@@ -912,14 +920,19 @@ function buildTaskPrompt(task, agent, executionContext = null) {
         .join('\n\n')
     : 'No previous run context.';
 
+  const linkedRepos = executionContext?.project ? getProjectRepos(executionContext.project) : [];
+  const repoSummary = linkedRepos.length
+    ? linkedRepos.map((repo) => `- ${repo.label || repo.role || 'repo'}${repo.primary ? ' (primary)' : ''}: ${repo.url}`).join('\n')
+    : null;
   const repoSection = executionContext?.project
     ? [
         'Project repo context:',
         `Project: ${executionContext.project.name}`,
-        `Repository URL: ${executionContext.project.repoUrl}`,
+        `Primary repository URL: ${executionContext.primaryRepo?.url || executionContext.project.repoUrl}`,
+        repoSummary ? `Linked repositories:\n${repoSummary}` : null,
         `Local task workspace: ${executionContext.cwd}`,
-        'Work only inside this repository unless the task explicitly requires shared workspace changes.',
-      ].join('\n')
+        'Work only inside the primary code repository unless the task explicitly requires shared workspace changes.',
+      ].filter(Boolean).join('\n')
     : [
         'Project repo context:',
         'No linked project repo was resolved for this task.',
@@ -1101,19 +1114,25 @@ function deriveRepoClonePath(repoUrl) {
 }
 
 async function ensureBaseRepoClone(project) {
-  let repoDir = await findExistingRepoClone(project.repoUrl);
+  const primaryRepo = getProjectPrimaryRepo(project);
+  if (!primaryRepo?.url) {
+    throw new Error(`Project ${project?.name || 'unknown'} has no primary repository configured.`);
+  }
+
+  let repoDir = await findExistingRepoClone(primaryRepo.url);
 
   if (!repoDir) {
-    repoDir = deriveRepoClonePath(project.repoUrl);
-    await runCommand(GIT_BIN, ['clone', project.repoUrl, repoDir], { cwd: GITHUB_REPOS_DIR });
-    return repoDir;
+    repoDir = deriveRepoClonePath(primaryRepo.url);
+    await runCommand(GIT_BIN, ['clone', primaryRepo.url, repoDir], { cwd: GITHUB_REPOS_DIR });
+    return { repoDir, primaryRepo };
   }
 
   await runCommand(GIT_BIN, ['fetch', 'origin', '--prune'], { cwd: repoDir }).catch(() => {});
-  return repoDir;
+  return { repoDir, primaryRepo };
 }
 
 async function resolveDefaultBranch(repoDir) {
+
   try {
     const result = await runCommand(GIT_BIN, ['symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: repoDir });
     const branch = result.stdout.trim().replace(/^refs\/remotes\/origin\//, '');
@@ -1152,16 +1171,19 @@ async function repoHasCommits(repoDir) {
 
 async function prepareTaskExecutionContext(task) {
   const project = state.projects.find((item) => item.name === task.owner) || null;
-  if (!project?.repoUrl) {
+  const primaryRepo = getProjectPrimaryRepo(project);
+  if (!primaryRepo?.url) {
     return {
       cwd: ROOT_WORKSPACE,
       project: null,
+      primaryRepo: null,
       repoDir: null,
       branchName: null,
     };
   }
 
-  const repoDir = await ensureBaseRepoClone(project);
+  const ensured = await ensureBaseRepoClone(project);
+  const repoDir = ensured.repoDir;
   const branchName = `task-${sanitizePathSegment(task.id)}`;
 
   if (!(await repoHasCommits(repoDir))) {
@@ -1169,6 +1191,7 @@ async function prepareTaskExecutionContext(task) {
     return {
       cwd: repoDir,
       project,
+      primaryRepo,
       repoDir,
       branchName,
     };
@@ -1188,6 +1211,7 @@ async function prepareTaskExecutionContext(task) {
   return {
     cwd: worktreeDir,
     project,
+    primaryRepo,
     repoDir,
     branchName,
   };
@@ -1201,11 +1225,11 @@ async function getCurrentBranch(repoDir) {
 async function publishTaskProjectChanges(task) {
   try {
     const project = state.projects.find((item) => item.name === task.owner) || null;
-    if (!project?.repoUrl) {
+    if (!getProjectPrimaryRepo(project)?.url) {
       return { ok: true, message: 'No linked repo was configured for this task.' };
     }
 
-    const repoDir = await ensureBaseRepoClone(project);
+    const { repoDir } = await ensureBaseRepoClone(project);
     const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
     const cwd = (await pathExists(path.join(worktreeDir, '.git'))) ? worktreeDir : repoDir;
     const branchName = await getCurrentBranch(cwd);
@@ -1521,15 +1545,20 @@ async function loadOrCreateState() {
       projects: Array.isArray(parsed.projects)
         ? parsed.projects
             .filter((project) => project && typeof project === 'object' && typeof project.name === 'string')
-            .map((project) => ({
-              id: String(project.id || nextId('project')),
-              name: String(project.name || '').trim(),
-              repoUrl: String(project.repoUrl || '').trim(),
-              gitWorkflow: normalizeProjectWorkflow(project.gitWorkflow),
-              notes: String(project.notes || '').trim(),
-              createdAt: Number(project.createdAt || Date.now()),
-              updatedAt: Number(project.updatedAt || Date.now()),
-            }))
+            .map((project) => {
+              const repos = normalizeProjectRepos(project.repos, project.repoUrl);
+              return {
+                id: String(project.id || nextId('project')),
+                name: String(project.name || '').trim(),
+                repoUrl: getProjectRepoUrl({ repos, repoUrl: project.repoUrl }),
+                repos,
+                gitWorkflow: normalizeProjectWorkflow(project.gitWorkflow),
+                reviewServices: normalizeProjectReviewServices(project.reviewServices),
+                notes: String(project.notes || '').trim(),
+                createdAt: Number(project.createdAt || Date.now()),
+                updatedAt: Number(project.updatedAt || Date.now()),
+              };
+            })
         : [],
       tasks: Array.isArray(parsed.tasks)
         ? parsed.tasks.map((task) => ({
@@ -1615,6 +1644,69 @@ function normalizeProjectWorkflow(value) {
   return ['direct-main', 'feature-branches', 'agent-branch'].includes(workflow)
     ? workflow
     : 'feature-branches';
+}
+
+function normalizeProjectRepos(repos, fallbackRepoUrl = '') {
+  const source = Array.isArray(repos) ? repos : [];
+  const normalized = source
+    .filter((repo) => repo && typeof repo === 'object')
+    .map((repo, index) => ({
+      id: String(repo.id || nextId('repo')),
+      label: String(repo.label || '').trim(),
+      role: String(repo.role || '').trim(),
+      url: String(repo.url || '').trim(),
+      primary: Boolean(repo.primary),
+      order: index,
+    }))
+    .filter((repo) => repo.url);
+
+  if (!normalized.length && String(fallbackRepoUrl || '').trim()) {
+    normalized.push({
+      id: nextId('repo'),
+      label: 'Primary repo',
+      role: 'app',
+      url: String(fallbackRepoUrl || '').trim(),
+      primary: true,
+      order: 0,
+    });
+  }
+
+  if (normalized.length && !normalized.some((repo) => repo.primary)) {
+    normalized[0].primary = true;
+  }
+
+  return normalized.map(({ order, ...repo }, index) => ({
+    ...repo,
+    primary: repo.primary || (!normalized.some((item) => item.primary && item.id !== repo.id) && index === 0),
+  }));
+}
+
+function normalizeProjectReviewServices(services) {
+  return (Array.isArray(services) ? services : [])
+    .filter((service) => service && typeof service === 'object')
+    .map((service) => ({
+      id: String(service.id || nextId('service')),
+      name: String(service.name || '').trim(),
+      repoRole: String(service.repoRole || '').trim(),
+      workingDirectory: String(service.workingDirectory || '').trim(),
+      startCommand: String(service.startCommand || '').trim(),
+      localUrl: String(service.localUrl || '').trim(),
+      healthcheckUrl: String(service.healthcheckUrl || '').trim(),
+    }))
+    .filter((service) => service.name || service.repoRole || service.workingDirectory || service.startCommand || service.localUrl || service.healthcheckUrl);
+}
+
+function getProjectRepos(project) {
+  return normalizeProjectRepos(project?.repos, project?.repoUrl);
+}
+
+function getProjectPrimaryRepo(project) {
+  const repos = getProjectRepos(project);
+  return repos.find((repo) => repo.primary) || repos[0] || null;
+}
+
+function getProjectRepoUrl(project) {
+  return getProjectPrimaryRepo(project)?.url || '';
 }
 
 function nextId(prefix) {
