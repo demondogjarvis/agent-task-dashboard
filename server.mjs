@@ -90,6 +90,35 @@ const agentCatalog = [
   },
 ];
 
+const DOCUMENTATION_AGENT_ID = 'north';
+const TASK_TIME_ESTIMATE_VERSION = 'heuristic-v1';
+const HUMAN_BASELINE_BY_SKILL_MINUTES = {
+  frontend: 95,
+  backend: 120,
+  ops: 100,
+  qa: 70,
+  automation: 90,
+  product: 80,
+};
+const HUMAN_MULTIPLIER_BY_SKILL = {
+  frontend: 7,
+  backend: 8,
+  ops: 7,
+  qa: 5,
+  automation: 7,
+  product: 6,
+};
+const HUMAN_REPO_ROLE_BONUS_MINUTES = {
+  docs: 35,
+  hq: 45,
+  documentation: 35,
+  backend: 20,
+  frontend: 15,
+  service: 20,
+  qa: 10,
+  automation: 15,
+};
+
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -201,6 +230,7 @@ async function handleApi(req, res, url) {
     const repoUrl = getProjectRepoUrl({ repos, repoUrl: body.repoUrl });
     const gitWorkflow = normalizeProjectWorkflow(body.gitWorkflow);
     const reviewServices = normalizeProjectReviewServices(body.reviewServices);
+    const keepDocumentationUpToDate = Boolean(body.keepDocumentationUpToDate);
     const notes = String(body.notes || '').trim();
 
     if (!name) {
@@ -225,6 +255,7 @@ async function handleApi(req, res, url) {
       repos,
       gitWorkflow,
       reviewServices,
+      keepDocumentationUpToDate,
       notes,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -252,6 +283,7 @@ async function handleApi(req, res, url) {
     const nextRepoUrl = getProjectRepoUrl({ repos: nextRepos, repoUrl: body.repoUrl });
     const nextGitWorkflow = normalizeProjectWorkflow(body.gitWorkflow);
     const nextReviewServices = normalizeProjectReviewServices(body.reviewServices);
+    const keepDocumentationUpToDate = Boolean(body.keepDocumentationUpToDate);
     const nextNotes = String(body.notes || '').trim();
 
     if (!nextName) {
@@ -278,6 +310,7 @@ async function handleApi(req, res, url) {
     project.repos = nextRepos;
     project.gitWorkflow = nextGitWorkflow;
     project.reviewServices = nextReviewServices;
+    project.keepDocumentationUpToDate = keepDocumentationUpToDate;
     project.notes = nextNotes;
     project.updatedAt = Date.now();
 
@@ -725,8 +758,12 @@ async function moveTask(task, direction) {
     task.completedAt = Date.now();
     task.updatedAt = Date.now();
     rebalanceLaneOrders(previousOwner, previousLane);
-    pushActivity(`${task.title} marked Done after review.${publish.message ? ` ${publish.message}` : ''}`, 'info');
-    return { ok: true, publish };
+    const documentationUpdate = await maybeQueueDocumentationUpdate(task);
+    pushActivity(
+      `${task.title} marked Done after review.${publish.message ? ` ${publish.message}` : ''}${documentationUpdate?.message ? ` ${documentationUpdate.message}` : ''}`,
+      'info'
+    );
+    return { ok: true, publish, documentationUpdate };
   }
 
   if (task.lane === 'review' && nextLane !== 'review') {
@@ -750,6 +787,97 @@ async function moveTask(task, direction) {
   task.updatedAt = Date.now();
   pushActivity(`${task.title} moved to ${laneTitle(nextLane)}.`, 'info');
   return { ok: true };
+}
+
+function resolveDocumentationFollowUpRepo(project) {
+  const repos = getProjectRepos(project);
+  return repos.find((repo) => isDocumentationRepo(repo)) || getProjectPrimaryRepo(project) || null;
+}
+
+function buildDocumentationFollowUpNotes(task, project, repo) {
+  const latestSummary = extractSummarySection(task.lastRun?.output || '') || sanitizeRunNote(task.lastRun?.output || '').split('\n').slice(0, 8).join('\n').trim();
+  const repoLabel = repo?.label || repo?.role || repo?.url || 'the project repository';
+
+  return [
+    `Documentation follow-up for completed task: ${task.title}`,
+    `Source task id: ${task.id}`,
+    `Project: ${project?.name || task.owner}`,
+    `Update documentation in ${repoLabel} so it matches the completed implementation.`,
+    '',
+    'Expectations:',
+    '- Update API docs, implementation docs, and project-spec docs where the completed work changed reality.',
+    '- Keep the documentation aligned with what was actually implemented, not just what was originally intended.',
+    '- If no documentation change is needed, say that clearly in the execution report and explain why.',
+    task.notes ? `Original task notes:\n${task.notes}` : null,
+    latestSummary ? `Completed task summary:\n${latestSummary}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+async function maybeQueueDocumentationUpdate(task) {
+  const project = state.projects.find((item) => item.name === task.owner) || null;
+  if (!project?.keepDocumentationUpToDate || task.docSyncSourceTaskId) {
+    return null;
+  }
+
+  const existingFollowUp = state.tasks.find(
+    (candidate) => candidate.docSyncSourceTaskId === task.id && candidate.owner === task.owner && candidate.lane !== 'done'
+  );
+  if (existingFollowUp) {
+    return { ok: true, taskId: existingFollowUp.id, message: 'Documentation follow-up was already queued.' };
+  }
+
+  const documentationRepo = resolveDocumentationFollowUpRepo(project);
+  const documentationTask = normalizeTaskRecord({
+    id: nextId('task'),
+    title: `Update documentation for ${task.title}`,
+    notes: buildDocumentationFollowUpNotes(task, project, documentationRepo),
+    priority: task.priority === 'critical' ? 'high' : task.priority,
+    skill: 'product',
+    preferredAgentId: DOCUMENTATION_AGENT_ID,
+    owner: task.owner,
+    lane: 'ready',
+    laneOrder: 0,
+    assignedAgentId: null,
+    runStatus: 'idle',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    lastRun: null,
+    comments: [
+      {
+        id: nextId('comment'),
+        author: 'Jarvis',
+        text: `Auto-created after ${task.title} moved to Done so project documentation stays aligned.`,
+        createdAt: Date.now(),
+      },
+    ],
+    blockedBy: [],
+    splitChildren: [],
+    parentTaskId: null,
+    repoRole: documentationRepo?.role || '',
+    docSyncSourceTaskId: task.id,
+  });
+
+  state.tasks.unshift(documentationTask);
+  placeTaskInLane(documentationTask, { owner: documentationTask.owner, lane: 'ready', position: 'top' });
+
+  const agent = pickAgentForTask(documentationTask, DOCUMENTATION_AGENT_ID);
+  if (!agent) {
+    return {
+      ok: true,
+      taskId: documentationTask.id,
+      message: 'Documentation follow-up was queued in Ready because the documentation agent is busy.',
+    };
+  }
+
+  await launchTaskRun(documentationTask, agent);
+  return {
+    ok: true,
+    taskId: documentationTask.id,
+    autoStarted: true,
+    message: 'Documentation follow-up started automatically.',
+  };
 }
 
 async function launchTaskRun(task, agent) {
@@ -900,6 +1028,7 @@ async function launchTaskRun(task, agent) {
     task.runStatus = 'failed';
     task.assignedAgentId = null;
     task.completedAt = null;
+    updateTaskTimeMetricsFromRun(task, { status: 'failed', durationMs: finishedAt - run.startedAt, finishedAt });
     task.lastRun = {
       id: run.id,
       status: 'failed',
@@ -980,6 +1109,7 @@ async function launchTaskRun(task, agent) {
       rebalanceLaneOrders(task.owner, 'inprogress');
       task.runStatus = 'succeeded';
       task.completedAt = null;
+      updateTaskTimeMetricsFromRun(task, { status: 'succeeded', durationMs: finishedAt - run.startedAt, finishedAt });
       task.lastRun = {
         id: run.id,
         status: 'succeeded',
@@ -1041,6 +1171,7 @@ async function launchTaskRun(task, agent) {
       task.runStatus = 'failed';
       task.assignedAgentId = null;
       task.completedAt = null;
+      updateTaskTimeMetricsFromRun(task, { status: 'failed', durationMs: finishedAt - run.startedAt, finishedAt });
       task.lastRun = {
         id: run.id,
         status: 'failed',
@@ -1244,6 +1375,16 @@ function buildTaskPrompt(task, agent, executionContext = null) {
         .join('\n')
     : null;
   const documentationRepos = linkedRepos.filter((item) => item.documentation);
+  const sourceTask = task.docSyncSourceTaskId ? findTaskById(task.docSyncSourceTaskId) : null;
+  const documentationTaskSection = task.docSyncSourceTaskId
+    ? [
+        'Documentation follow-up context:',
+        'This task was generated automatically after another task reached Done.',
+        `Source task: ${sourceTask?.title || task.docSyncSourceTaskId}`,
+        'Update any API docs, implementation docs, or project-spec docs needed to match the completed work.',
+        'If no documentation change is required, say so explicitly in the report and explain why.',
+      ].join('\n')
+    : null;
   const documentationSection = documentationRepos.length
     ? [
         'Documentation to review before coding:',
@@ -1262,10 +1403,13 @@ function buildTaskPrompt(task, agent, executionContext = null) {
     ? [
         'Project repo context:',
         `Project: ${executionContext.project.name}`,
-        `Primary repository URL: ${executionContext.primaryRepo?.url || executionContext.project.repoUrl}`,
+        `Task repository URL: ${executionContext.primaryRepo?.url || executionContext.project.repoUrl}`,
+        executionContext.defaultProjectRepo?.url && normalizeRepoUrl(executionContext.defaultProjectRepo.url) !== normalizeRepoUrl(executionContext.primaryRepo?.url)
+          ? `Default project repository URL: ${executionContext.defaultProjectRepo.url}`
+          : null,
         repoSummary ? `Linked repositories:\n${repoSummary}` : null,
         `Local task workspace: ${executionContext.cwd}`,
-        'Work only inside the primary code repository unless the task explicitly requires shared workspace changes.',
+        'Work inside the task repository unless the task explicitly requires linked-repo context.',
       ].filter(Boolean).join('\n')
     : [
         'Project repo context:',
@@ -1284,6 +1428,7 @@ function buildTaskPrompt(task, agent, executionContext = null) {
     `Task notes: ${task.notes || 'No additional notes provided.'}`,
     '',
     repoSection,
+    documentationTaskSection,
     documentationSection,
     'Task comments:',
     commentLines,
@@ -1959,18 +2104,20 @@ async function repoHasCommits(repoDir) {
 
 async function prepareTaskExecutionContext(task) {
   const project = state.projects.find((item) => item.name === task.owner) || null;
-  const primaryRepo = getProjectPrimaryRepo(project);
-  if (!primaryRepo?.url) {
+  const targetRepo = getProjectRepoByRole(project, task.repoRole);
+  const defaultProjectRepo = getProjectPrimaryRepo(project);
+  if (!targetRepo?.url) {
     return {
       cwd: ROOT_WORKSPACE,
       project: null,
       primaryRepo: null,
+      defaultProjectRepo: null,
       repoDir: null,
       branchName: null,
     };
   }
 
-  const ensured = await ensureBaseRepoClone(project);
+  const ensured = await ensureProjectRepoClone(project, targetRepo);
   const repoDir = ensured.repoDir;
   const branchName = `task-${sanitizePathSegment(task.id)}`;
   const projectRepos = getProjectRepos(project);
@@ -1979,7 +2126,7 @@ async function prepareTaskExecutionContext(task) {
   if (!(await repoHasCommits(repoDir))) {
     await runCommand(GIT_BIN, ['checkout', '--orphan', branchName], { cwd: repoDir }).catch(() => {});
     for (const repo of projectRepos) {
-      const linkedRepoDir = repo.url === primaryRepo.url
+      const linkedRepoDir = normalizeRepoUrl(repo.url) === normalizeRepoUrl(targetRepo.url)
         ? repoDir
         : (await ensureProjectRepoClone(project, repo)).repoDir;
       linkedRepos.push({
@@ -1992,7 +2139,8 @@ async function prepareTaskExecutionContext(task) {
     return {
       cwd: repoDir,
       project,
-      primaryRepo,
+      primaryRepo: targetRepo,
+      defaultProjectRepo,
       repoDir,
       branchName,
       linkedRepos,
@@ -2011,7 +2159,7 @@ async function prepareTaskExecutionContext(task) {
   }
 
   for (const repo of projectRepos) {
-    const linkedRepoDir = repo.url === primaryRepo.url
+    const linkedRepoDir = normalizeRepoUrl(repo.url) === normalizeRepoUrl(targetRepo.url)
       ? worktreeDir
       : (await ensureProjectRepoClone(project, repo)).repoDir;
     linkedRepos.push({
@@ -2025,7 +2173,8 @@ async function prepareTaskExecutionContext(task) {
   return {
     cwd: worktreeDir,
     project,
-    primaryRepo,
+    primaryRepo: targetRepo,
+    defaultProjectRepo,
     repoDir,
     branchName,
     linkedRepos,
@@ -2040,11 +2189,12 @@ async function getCurrentBranch(repoDir) {
 async function publishTaskProjectChanges(task) {
   try {
     const project = state.projects.find((item) => item.name === task.owner) || null;
-    if (!getProjectPrimaryRepo(project)?.url) {
+    const targetRepo = getProjectRepoByRole(project, task.repoRole);
+    if (!targetRepo?.url) {
       return { ok: true, message: 'No linked repo was configured for this task.' };
     }
 
-    const { repoDir } = await ensureBaseRepoClone(project);
+    const { repoDir } = await ensureProjectRepoClone(project, targetRepo);
     const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
     const cwd = (await pathExists(path.join(worktreeDir, '.git'))) ? worktreeDir : repoDir;
     const branchName = await getCurrentBranch(cwd);
@@ -2523,6 +2673,22 @@ function normalizeProjectReviewServices(services) {
     .filter((service) => service.name || service.repoRole || service.workingDirectory || service.startCommand || service.localUrl || service.healthcheckUrl);
 }
 
+function normalizeTaskTimeMetrics(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    actualAgentMs: Math.max(0, Number(source.actualAgentMs || 0) || 0),
+    estimatedHumanMs: Math.max(0, Number(source.estimatedHumanMs || 0) || 0),
+    estimatedSavedMs: Number.isFinite(Number(source.estimatedSavedMs)) ? Number(source.estimatedSavedMs) : 0,
+    totalRunCount: Math.max(0, Number(source.totalRunCount || 0) || 0),
+    successfulRunCount: Math.max(0, Number(source.successfulRunCount || 0) || 0),
+    failedRunCount: Math.max(0, Number(source.failedRunCount || 0) || 0),
+    lastRunDurationMs: Math.max(0, Number(source.lastRunDurationMs || 0) || 0),
+    lastSuccessfulRunDurationMs: Math.max(0, Number(source.lastSuccessfulRunDurationMs || 0) || 0),
+    estimateVersion: String(source.estimateVersion || TASK_TIME_ESTIMATE_VERSION),
+    lastUpdatedAt: Number(source.lastUpdatedAt || 0) || null,
+  };
+}
+
 function getProjectRepos(project) {
   return normalizeProjectRepos(project?.repos, project?.repoUrl);
 }
@@ -2554,7 +2720,86 @@ function normalizeTaskRecord(task) {
     laneOrder: Number.isFinite(Number(task.laneOrder)) ? Number(task.laneOrder) : null,
     completedAt: Number(task.completedAt || 0) || null,
     repoRole: String(task.repoRole || '').trim(),
+    docSyncSourceTaskId: task.docSyncSourceTaskId ? String(task.docSyncSourceTaskId) : null,
+    timeMetrics: normalizeTaskTimeMetrics(task.timeMetrics),
   };
+}
+
+function countWords(text) {
+  return String(text || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function estimateHumanTaskDurationMs(task, referenceAgentMs = 0) {
+  const skill = sanitizeSkill(task?.skill);
+  const repoRole = String(task?.repoRole || '').trim().toLowerCase();
+  const noteWords = countWords(task?.notes);
+  const commentCount = Array.isArray(task?.comments) ? task.comments.length : 0;
+  const blockerCount = normalizeTaskDependencyIds(task?.blockedBy).length;
+  const baseMinutes = HUMAN_BASELINE_BY_SKILL_MINUTES[skill] || HUMAN_BASELINE_BY_SKILL_MINUTES.product;
+  const multiplier = HUMAN_MULTIPLIER_BY_SKILL[skill] || HUMAN_MULTIPLIER_BY_SKILL.product;
+  const priorityBonusMinutes = task?.priority === 'critical' ? 35 : task?.priority === 'high' ? 20 : task?.priority === 'medium' ? 10 : 0;
+  const noteBonusMinutes = Math.min(70, Math.ceil(noteWords / 30) * 8);
+  const commentBonusMinutes = Math.min(24, commentCount * 6);
+  const blockerBonusMinutes = Math.min(18, blockerCount * 6);
+  const repoBonusMinutes = HUMAN_REPO_ROLE_BONUS_MINUTES[repoRole] || 0;
+  const baselineMs = (baseMinutes + priorityBonusMinutes + noteBonusMinutes + commentBonusMinutes + blockerBonusMinutes + repoBonusMinutes) * 60 * 1000;
+  const runtimeDerivedMs = Math.max(0, Number(referenceAgentMs || 0)) * multiplier;
+  return clamp(Math.max(baselineMs, runtimeDerivedMs), 15 * 60 * 1000, 16 * 60 * 60 * 1000);
+}
+
+function buildTaskTimeSummary(task, activeRun = null) {
+  const stored = normalizeTaskTimeMetrics(task?.timeMetrics);
+  const liveRunMs = activeRun?.startedAt ? Math.max(0, Date.now() - activeRun.startedAt) : 0;
+  const actualAgentMs = stored.actualAgentMs + liveRunMs;
+  const referenceAgentMs = stored.lastSuccessfulRunDurationMs || stored.lastRunDurationMs || liveRunMs || stored.actualAgentMs;
+
+  if (!actualAgentMs && !referenceAgentMs) {
+    return null;
+  }
+
+  const estimatedHumanMs = stored.estimatedHumanMs || estimateHumanTaskDurationMs(task, referenceAgentMs);
+  const estimatedSavedMs = estimatedHumanMs - actualAgentMs;
+
+  return {
+    ...stored,
+    actualAgentMs,
+    estimatedHumanMs,
+    estimatedSavedMs,
+    liveRunMs,
+    automationMultiplier: actualAgentMs > 0 ? estimatedHumanMs / actualAgentMs : null,
+  };
+}
+
+function updateTaskTimeMetricsFromRun(task, { status, durationMs, finishedAt = Date.now() }) {
+  const metrics = normalizeTaskTimeMetrics(task?.timeMetrics);
+  const normalizedDurationMs = Math.max(0, Number(durationMs || 0) || 0);
+
+  metrics.actualAgentMs += normalizedDurationMs;
+  metrics.totalRunCount += 1;
+  metrics.lastRunDurationMs = normalizedDurationMs;
+  metrics.lastUpdatedAt = finishedAt;
+
+  if (status === 'succeeded') {
+    metrics.successfulRunCount += 1;
+    metrics.lastSuccessfulRunDurationMs = normalizedDurationMs;
+  } else if (status === 'failed') {
+    metrics.failedRunCount += 1;
+  }
+
+  const referenceAgentMs = metrics.lastSuccessfulRunDurationMs || metrics.lastRunDurationMs || metrics.actualAgentMs;
+  metrics.estimatedHumanMs = estimateHumanTaskDurationMs(task, referenceAgentMs);
+  metrics.estimatedSavedMs = metrics.estimatedHumanMs - metrics.actualAgentMs;
+  metrics.estimateVersion = TASK_TIME_ESTIMATE_VERSION;
+
+  task.timeMetrics = metrics;
+  return metrics;
 }
 
 function resolveTaskSkillFromRepoRole(role, fallbackSkill = 'product') {
