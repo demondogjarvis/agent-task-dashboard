@@ -93,30 +93,30 @@ const agentCatalog = [
 const DOCUMENTATION_AGENT_ID = 'north';
 const TASK_TIME_ESTIMATE_VERSION = 'heuristic-v1';
 const HUMAN_BASELINE_BY_SKILL_MINUTES = {
-  frontend: 95,
-  backend: 120,
-  ops: 100,
-  qa: 70,
-  automation: 90,
-  product: 80,
+  frontend: 40,
+  backend: 60,
+  ops: 50,
+  qa: 35,
+  automation: 45,
+  product: 40,
 };
 const HUMAN_MULTIPLIER_BY_SKILL = {
-  frontend: 7,
-  backend: 8,
-  ops: 7,
-  qa: 5,
-  automation: 7,
-  product: 6,
+  frontend: 5,
+  backend: 6,
+  ops: 5,
+  qa: 4,
+  automation: 5,
+  product: 4,
 };
 const HUMAN_REPO_ROLE_BONUS_MINUTES = {
-  docs: 35,
-  hq: 45,
-  documentation: 35,
-  backend: 20,
-  frontend: 15,
-  service: 20,
-  qa: 10,
-  automation: 15,
+  docs: 20,
+  hq: 25,
+  documentation: 20,
+  backend: 15,
+  frontend: 10,
+  service: 15,
+  qa: 8,
+  automation: 10,
 };
 
 
@@ -2288,7 +2288,7 @@ function buildProjectStats(project, tasks, activeRunByTaskId = new Map()) {
   const agentTimeMs = trackedCompletedTasks.reduce((sum, item) => sum + item.actualAgentMs, 0);
   const humanTimeMs = trackedCompletedTasks.reduce((sum, item) => sum + item.estimatedHumanMs, 0);
   const timeSavedMs = trackedCompletedTasks.reduce((sum, item) => sum + item.estimatedSavedMs, 0);
-  const totalRunCount = projectTasks.reduce((sum, task) => sum + normalizeTaskTimeMetrics(task.timeMetrics).totalRunCount, 0);
+  const totalRunCount = projectTasks.reduce((sum, task) => sum + getTaskStoredOrDerivedTimeMetrics(task).totalRunCount, 0);
   const blockedTaskCount = projectTasks.filter((task) => task.lane !== 'done' && getUnresolvedBlockerIds(task).length > 0).length;
   const activeTaskCount = projectTasks.filter((task) => ['inprogress', 'review'].includes(task.lane)).length;
 
@@ -2784,10 +2784,10 @@ function estimateHumanTaskDurationMs(task, referenceAgentMs = 0) {
   const blockerCount = normalizeTaskDependencyIds(task?.blockedBy).length;
   const baseMinutes = HUMAN_BASELINE_BY_SKILL_MINUTES[skill] || HUMAN_BASELINE_BY_SKILL_MINUTES.product;
   const multiplier = HUMAN_MULTIPLIER_BY_SKILL[skill] || HUMAN_MULTIPLIER_BY_SKILL.product;
-  const priorityBonusMinutes = task?.priority === 'critical' ? 35 : task?.priority === 'high' ? 20 : task?.priority === 'medium' ? 10 : 0;
-  const noteBonusMinutes = Math.min(70, Math.ceil(noteWords / 30) * 8);
-  const commentBonusMinutes = Math.min(24, commentCount * 6);
-  const blockerBonusMinutes = Math.min(18, blockerCount * 6);
+  const priorityBonusMinutes = task?.priority === 'critical' ? 25 : task?.priority === 'high' ? 15 : task?.priority === 'medium' ? 8 : 0;
+  const noteBonusMinutes = Math.min(30, Math.ceil(noteWords / 50) * 5);
+  const commentBonusMinutes = Math.min(16, commentCount * 4);
+  const blockerBonusMinutes = Math.min(12, blockerCount * 4);
   const repoBonusMinutes = HUMAN_REPO_ROLE_BONUS_MINUTES[repoRole] || 0;
   const baselineMs = (baseMinutes + priorityBonusMinutes + noteBonusMinutes + commentBonusMinutes + blockerBonusMinutes + repoBonusMinutes) * 60 * 1000;
   const runtimeDerivedMs = Math.max(0, Number(referenceAgentMs || 0)) * multiplier;
@@ -2795,7 +2795,7 @@ function estimateHumanTaskDurationMs(task, referenceAgentMs = 0) {
 }
 
 function buildTaskTimeSummary(task, activeRun = null) {
-  const stored = normalizeTaskTimeMetrics(task?.timeMetrics);
+  const stored = getTaskStoredOrDerivedTimeMetrics(task);
   const liveRunMs = activeRun?.startedAt ? Math.max(0, Date.now() - activeRun.startedAt) : 0;
   const actualAgentMs = stored.actualAgentMs + liveRunMs;
   const referenceAgentMs = stored.lastSuccessfulRunDurationMs || stored.lastRunDurationMs || liveRunMs || stored.actualAgentMs;
