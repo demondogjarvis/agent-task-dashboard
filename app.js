@@ -2011,6 +2011,14 @@ taskEditForm.addEventListener('submit', (event) => {
   });
 });
 
+taskEditOwner?.addEventListener('change', () => {
+  const task = getTaskById(selectedTaskId);
+  if (!task) {
+    return;
+  }
+  populateBlockedByOptions(taskEditBlockedBy, { ...task, owner: taskEditOwner.value || task.owner }, []);
+});
+
 taskCommentForm.addEventListener('submit', (event) => {
   event.preventDefault();
   if (!selectedTaskId) return;

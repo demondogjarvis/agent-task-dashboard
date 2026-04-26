@@ -357,6 +357,23 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  const splitPlanRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/split-plan$/);
+  if (splitPlanRoute && req.method === 'GET') {
+    const task = state.tasks.find((item) => item.id === splitPlanRoute[1]);
+    if (!task) {
+      sendJson(res, 404, { error: 'not_found', message: 'Task not found.' });
+      return;
+    }
+
+    try {
+      const plan = await getSplitTaskPlan(task);
+      sendJson(res, 200, { ok: true, plan, parentTask: task });
+    } catch (error) {
+      sendJson(res, 400, { error: 'split_failed', message: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+
   const splitRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/split$/);
   if (splitRoute && req.method === 'POST') {
     const task = state.tasks.find((item) => item.id === splitRoute[1]);
@@ -366,7 +383,8 @@ async function handleApi(req, res, url) {
     }
 
     try {
-      const createdTasks = await splitTaskWithJarvis(task);
+      const body = await readJsonBody(req);
+      const createdTasks = await applySplitTaskPlan(task, body.plan);
       sendJson(res, 201, { ok: true, tasks: createdTasks, parentTask: task });
     } catch (error) {
       sendJson(res, 400, { error: 'split_failed', message: error instanceof Error ? error.message : String(error) });
@@ -536,9 +554,12 @@ async function handleApi(req, res, url) {
     task.title = title;
     task.notes = String(body.notes || '').trim();
     task.priority = sanitizePriority(body.priority);
-    task.owner = String(body.owner || '').trim() || 'Unassigned stream';
+    const nextOwner = String(body.owner || '').trim() || 'Unassigned stream';
+    const nextBlockedBy = validateTaskDependencies(task, body.blockedBy, nextOwner);
+    task.owner = nextOwner;
     task.preferredAgentId = preferredAgent?.id || null;
     task.skill = preferredAgent ? preferredAgent.specialty : task.skill;
+    task.blockedBy = nextBlockedBy;
     task.updatedAt = Date.now();
 
     pushActivity(`${task.title} was updated.`, 'info');
@@ -2363,6 +2384,10 @@ function suggestSplitRolesForProject(project, task) {
 }
 
 async function splitTaskWithJarvis(task) {
+  return await applySplitTaskPlan(task);
+}
+
+function assertTaskCanBeSplit(task) {
   if (activeRuns.has(task.id) || task.runStatus === 'running') {
     throw new Error('Running tasks cannot be split right now.');
   }
@@ -2370,22 +2395,11 @@ async function splitTaskWithJarvis(task) {
   if (isSplitParentTask(task)) {
     throw new Error('This task has already been split into child tasks.');
   }
+}
 
-  const project = state.projects.find((item) => item.name === task.owner) || null;
-  if (!project) {
-    throw new Error('Attach this task to a project before splitting it.');
-  }
-
-  const roles = suggestSplitRolesForProject(project, task);
-  if (!roles.length) {
-    throw new Error('No implementation areas could be derived for this project yet.');
-  }
-
-  const now = Date.now();
-  const createdTasks = [];
-
-  roles.forEach((role, index) => {
-    const dependencyTargets = createdTasks.filter((candidate) => {
+function buildDefaultDependencyTempIds(role, currentEntries) {
+  return currentEntries
+    .filter((candidate) => {
       if (role === 'frontend') {
         return ['backend', 'service', 'implementation'].includes(normalizeRepoRoleName(candidate.repoRole));
       }
@@ -2393,15 +2407,190 @@ async function splitTaskWithJarvis(task) {
         return true;
       }
       return false;
-    });
+    })
+    .map((candidate) => candidate.tempId);
+}
+
+function createDefaultSplitPlan(task, project) {
+  assertTaskCanBeSplit(task);
+  const roles = suggestSplitRolesForProject(project, task);
+  if (!roles.length) {
+    throw new Error('No implementation areas could be derived for this project yet.');
+  }
+
+  const plan = [];
+  roles.forEach((role, index) => {
+    const blockedBy = buildDefaultDependencyTempIds(role, plan);
+    const blockers = blockedBy.map((tempId) => plan.find((item) => item.tempId === tempId)).filter(Boolean);
     const skill = resolveTaskSkillFromRepoRole(role, task.skill);
-    const childTask = normalizeTaskRecord({
-      id: nextId('task'),
+    plan.push({
+      tempId: `split-${index + 1}`,
       title: `${task.title} (${repoRoleTitle(role)})`,
-      notes: buildSplitTaskNotes(task, role, dependencyTargets),
+      notes: buildSplitTaskNotes(task, role, blockers),
       priority: task.priority,
       skill,
       preferredAgentId: findPreferredAgentIdForSkill(skill),
+      repoRole: role,
+      blockedBy,
+    });
+  });
+
+  return plan;
+}
+
+function validatePlanDependencyGraph(entries) {
+  const map = new Map(entries.map((entry) => [entry.tempId, entry]));
+  const visited = new Set();
+  const visiting = new Set();
+
+  function visit(tempId) {
+    if (visiting.has(tempId)) {
+      throw new Error('The proposed split plan has a circular dependency.');
+    }
+    if (visited.has(tempId)) {
+      return;
+    }
+    visiting.add(tempId);
+    const entry = map.get(tempId);
+    for (const blockerId of entry?.blockedBy || []) {
+      if (!map.has(blockerId)) {
+        throw new Error('A split dependency references a task that is not in the plan.');
+      }
+      visit(blockerId);
+    }
+    visiting.delete(tempId);
+    visited.add(tempId);
+  }
+
+  for (const entry of entries) {
+    visit(entry.tempId);
+  }
+}
+
+function normalizeSplitPlanEntries(task, project, inputPlan) {
+  const defaults = createDefaultSplitPlan(task, project);
+  const source = Array.isArray(inputPlan) && inputPlan.length ? inputPlan : defaults;
+  const entries = source
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry, index) => {
+      const defaultEntry = defaults[index] || defaults.find((item) => item.repoRole === normalizeRepoRoleName(entry.repoRole)) || null;
+      const repoRole = normalizeRepoRoleName(entry.repoRole || defaultEntry?.repoRole || task.repoRole || task.skill || 'implementation');
+      const skill = resolveTaskSkillFromRepoRole(repoRole, task.skill);
+      const preferredAgentId = String(entry.preferredAgentId || defaultEntry?.preferredAgentId || findPreferredAgentIdForSkill(skill) || '').trim();
+      if (preferredAgentId && !agentCatalog.some((agent) => agent.id === preferredAgentId)) {
+        throw new Error(`Invalid preferred agent in split plan: ${preferredAgentId}`);
+      }
+      return {
+        tempId: String(entry.tempId || `split-${index + 1}`).trim(),
+        title: String(entry.title || defaultEntry?.title || `${task.title} (${repoRoleTitle(repoRole)})`).trim(),
+        notes: String(entry.notes || defaultEntry?.notes || buildSplitTaskNotes(task, repoRole)).trim(),
+        priority: sanitizePriority(entry.priority || task.priority),
+        skill,
+        preferredAgentId: preferredAgentId || null,
+        repoRole,
+        blockedBy: normalizeTaskDependencyIds(entry.blockedBy),
+      };
+    });
+
+  if (!entries.length) {
+    throw new Error('Split plan must include at least one child task.');
+  }
+
+  const tempIds = new Set();
+  entries.forEach((entry) => {
+    if (!entry.tempId) {
+      throw new Error('Every split plan entry needs an id.');
+    }
+    if (tempIds.has(entry.tempId)) {
+      throw new Error('Split plan entry ids must be unique.');
+    }
+    tempIds.add(entry.tempId);
+    if (!entry.title) {
+      throw new Error('Every split child task needs a title.');
+    }
+    if (entry.blockedBy.includes(entry.tempId)) {
+      throw new Error(`Split child task ${entry.title} cannot block itself.`);
+    }
+    entry.blockedBy.forEach((blockerId) => {
+      if (!tempIds.has(blockerId) && !entries.some((item) => item.tempId === blockerId)) {
+        throw new Error(`Split child task ${entry.title} references an unknown blocker.`);
+      }
+    });
+  });
+
+  validatePlanDependencyGraph(entries);
+  return entries;
+}
+
+function taskDependsOn(taskId, targetTaskId, overrides = new Map(), visited = new Set()) {
+  if (!taskId || visited.has(taskId)) {
+    return false;
+  }
+  if (taskId === targetTaskId) {
+    return true;
+  }
+
+  visited.add(taskId);
+  const task = findTaskById(taskId);
+  const blockedBy = overrides.has(taskId) ? overrides.get(taskId) : normalizeTaskDependencyIds(task?.blockedBy);
+  return blockedBy.some((blockerId) => blockerId === targetTaskId || taskDependsOn(blockerId, targetTaskId, overrides, visited));
+}
+
+function validateTaskDependencies(task, blockedByIds, ownerName = task.owner) {
+  const normalized = normalizeTaskDependencyIds(blockedByIds);
+  if (normalized.includes(task.id)) {
+    throw new Error('A task cannot be blocked by itself.');
+  }
+
+  normalized.forEach((blockerId) => {
+    const blocker = findTaskById(blockerId);
+    if (!blocker) {
+      throw new Error('One of the selected blocker tasks no longer exists.');
+    }
+    if (blocker.owner !== ownerName) {
+      throw new Error('Blocked by tasks must stay within the same project.');
+    }
+  });
+
+  const overrides = new Map([[task.id, normalized]]);
+  normalized.forEach((blockerId) => {
+    if (taskDependsOn(blockerId, task.id, overrides)) {
+      throw new Error('This dependency would create a circular blocker chain.');
+    }
+  });
+
+  return normalized;
+}
+
+async function getSplitTaskPlan(task) {
+  assertTaskCanBeSplit(task);
+  const project = state.projects.find((item) => item.name === task.owner) || null;
+  if (!project) {
+    throw new Error('Attach this task to a project before splitting it.');
+  }
+  return normalizeSplitPlanEntries(task, project);
+}
+
+async function applySplitTaskPlan(task, inputPlan = null) {
+  assertTaskCanBeSplit(task);
+  const project = state.projects.find((item) => item.name === task.owner) || null;
+  if (!project) {
+    throw new Error('Attach this task to a project before splitting it.');
+  }
+
+  const plan = normalizeSplitPlanEntries(task, project, inputPlan);
+  const now = Date.now();
+  const tempIdToRealTaskId = new Map();
+  const createdTasks = [];
+
+  plan.forEach((entry, index) => {
+    const childTask = normalizeTaskRecord({
+      id: nextId('task'),
+      title: entry.title,
+      notes: entry.notes,
+      priority: entry.priority,
+      skill: entry.skill,
+      preferredAgentId: entry.preferredAgentId,
       owner: task.owner,
       lane: 'definition',
       assignedAgentId: null,
@@ -2410,12 +2599,17 @@ async function splitTaskWithJarvis(task) {
       updatedAt: now + index,
       lastRun: null,
       comments: [],
-      blockedBy: dependencyTargets.map((candidate) => candidate.id),
+      blockedBy: [],
       splitChildren: [],
       parentTaskId: task.id,
-      repoRole: role,
+      repoRole: entry.repoRole,
     });
+    tempIdToRealTaskId.set(entry.tempId, childTask.id);
     createdTasks.push(childTask);
+  });
+
+  createdTasks.forEach((childTask, index) => {
+    childTask.blockedBy = normalizeTaskDependencyIds(plan[index].blockedBy.map((tempId) => tempIdToRealTaskId.get(tempId)).filter(Boolean));
   });
 
   state.tasks.unshift(...createdTasks.slice().reverse());

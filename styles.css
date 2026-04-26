@@ -1286,7 +1286,8 @@ textarea:focus {
   .hero-grid,
   .task-form,
   .project-form,
-  .project-config-grid {
+  .project-config-grid,
+  .split-plan-grid {
     grid-template-columns: 1fr;
   }
 }
