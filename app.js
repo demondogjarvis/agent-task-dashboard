@@ -52,6 +52,7 @@ let taskDetailDraftTaskId = null;
 let isTaskEditMode = false;
 let selectedProjectId = null;
 let selectedTaskBoardProjectId = null;
+let dragState = null;
 
 const statsGrid = document.getElementById('stats-grid');
 const approvalList = document.getElementById('approval-list');
@@ -388,6 +389,37 @@ function getTaskBoardTasks() {
   return project ? getTasksForProject(project) : [];
 }
 
+function getTaskLaneOrder(task) {
+  return Number.isFinite(Number(task?.laneOrder)) ? Number(task.laneOrder) : null;
+}
+
+function compareTasksForLane(a, b, laneId = a?.lane || b?.lane || '') {
+  if (laneId === 'done') {
+    return getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority];
+  }
+
+  const aLaneOrder = getTaskLaneOrder(a);
+  const bLaneOrder = getTaskLaneOrder(b);
+
+  if (aLaneOrder !== null && bLaneOrder !== null && aLaneOrder !== bLaneOrder) {
+    return aLaneOrder - bLaneOrder;
+  }
+
+  if (aLaneOrder !== null && bLaneOrder === null) {
+    return -1;
+  }
+
+  if (aLaneOrder === null && bLaneOrder !== null) {
+    return 1;
+  }
+
+  return priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0);
+}
+
+function sortTasksForLane(tasks, laneId) {
+  return [...(tasks || [])].sort((a, b) => compareTasksForLane(a, b, laneId));
+}
+
 function getTaskById(taskId) {
   return (dashboard.tasks || []).find((task) => task.id === taskId) || null;
 }
@@ -436,7 +468,7 @@ function formatBlockingSummary(task) {
 }
 
 function getTaskBoardApprovals() {
-  return getTaskBoardTasks().filter((task) => task.lane === 'approval');
+  return sortTasksForLane(getTaskBoardTasks().filter((task) => task.lane === 'approval'), 'approval');
 }
 
 function isTaskVisibleInCurrentBoard(task) {
@@ -784,6 +816,117 @@ function buildTaskActions(task, options = {}) {
   return actions.join('');
 }
 
+function isTaskCardDraggable(task, laneId) {
+  return laneId !== 'done' && task?.runStatus !== 'running';
+}
+
+function clearTaskDragState() {
+  dragState = null;
+  document.body.classList.remove('dragging-task-card');
+  kanbanBoard.querySelectorAll('.task-card.dragging').forEach((card) => card.classList.remove('dragging'));
+  kanbanBoard.querySelectorAll('.task-stack.drag-over-stack').forEach((stack) => stack.classList.remove('drag-over-stack'));
+  kanbanBoard.querySelectorAll('.task-card.drop-target-before').forEach((card) => card.classList.remove('drop-target-before'));
+}
+
+function findDropPlacement(stack, clientY) {
+  const cards = [...stack.querySelectorAll('.task-card[data-task-id]')].filter((card) => card.dataset.taskId !== dragState?.taskId);
+
+  for (const card of cards) {
+    const rect = card.getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) {
+      return {
+        beforeTaskId: card.dataset.taskId,
+        afterTaskId: null,
+      };
+    }
+  }
+
+  return {
+    beforeTaskId: null,
+    afterTaskId: cards.at(-1)?.dataset.taskId || null,
+  };
+}
+
+function applyDropIndicator(stack, placement) {
+  kanbanBoard.querySelectorAll('.task-card.drop-target-before').forEach((card) => card.classList.remove('drop-target-before'));
+  kanbanBoard.querySelectorAll('.task-stack.drag-over-stack').forEach((item) => {
+    if (item !== stack) {
+      item.classList.remove('drag-over-stack');
+    }
+  });
+
+  stack.classList.add('drag-over-stack');
+  if (placement.beforeTaskId) {
+    stack.querySelector(`.task-card[data-task-id="${placement.beforeTaskId}"]`)?.classList.add('drop-target-before');
+  }
+}
+
+function handleTaskCardDragStart(event) {
+  const card = event.currentTarget;
+  const task = getTaskById(card.dataset.taskId);
+  if (!task || !isTaskCardDraggable(task, task.lane)) {
+    event.preventDefault();
+    return;
+  }
+
+  dragState = {
+    taskId: task.id,
+    lane: task.lane,
+  };
+
+  card.classList.add('dragging');
+  document.body.classList.add('dragging-task-card');
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', task.id);
+  }
+}
+
+function handleTaskCardDragEnd(event) {
+  event.currentTarget.classList.remove('dragging');
+  window.setTimeout(() => {
+    clearTaskDragState();
+  }, 0);
+}
+
+function handleTaskStackDragOver(event) {
+  if (!dragState) {
+    return;
+  }
+
+  const stack = event.currentTarget;
+  if (stack.dataset.lane !== dragState.lane) {
+    return;
+  }
+
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+  applyDropIndicator(stack, findDropPlacement(stack, event.clientY));
+}
+
+function handleTaskStackDrop(event) {
+  if (!dragState) {
+    return;
+  }
+
+  const stack = event.currentTarget;
+  if (stack.dataset.lane !== dragState.lane) {
+    clearTaskDragState();
+    return;
+  }
+
+  event.preventDefault();
+  const placement = findDropPlacement(stack, event.clientY);
+  const taskId = dragState.taskId;
+  clearTaskDragState();
+  mutate(() => api(`/api/tasks/${taskId}/reorder`, {
+    method: 'POST',
+    body: JSON.stringify(placement.beforeTaskId ? { beforeTaskId: placement.beforeTaskId } : placement.afterTaskId ? { afterTaskId: placement.afterTaskId } : {}),
+  }));
+}
+
 function buildSummaryTaskCard(task, mode) {
   const blocked = mode === 'ready' && isTaskBlocked(task);
   const actionLabel = mode === 'approval' ? 'Approve' : mode === 'ready' ? 'Assign' : null;
@@ -805,8 +948,8 @@ function buildSummaryTaskCard(task, mode) {
 }
 
 function renderOverview() {
-  const approvals = dashboard.approvals.slice(0, 4);
-  const readyTasks = dashboard.tasks.filter((task) => task.lane === 'ready').slice(0, 4);
+  const approvals = sortTasksForLane(dashboard.approvals, 'approval').slice(0, 4);
+  const readyTasks = sortTasksForLane(dashboard.tasks.filter((task) => task.lane === 'ready'), 'ready').slice(0, 4);
   const agents = dashboard.agents.slice().sort((a, b) => a.name.localeCompare(b.name));
   const activity = dashboard.activity.slice(0, 6);
 
@@ -870,13 +1013,7 @@ function renderKanban() {
   const visibleDoneTasks = getVisibleDoneTasks(doneTasks);
 
   dashboard.lanes.forEach((lane) => {
-    const tasks = (lane.id === 'done' ? visibleDoneTasks : boardTasks.filter((task) => task.lane === lane.id))
-      .sort((a, b) => {
-        if (lane.id === 'done') {
-          return getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority];
-        }
-        return priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0);
-      });
+    const tasks = sortTasksForLane(lane.id === 'done' ? visibleDoneTasks : boardTasks.filter((task) => task.lane === lane.id), lane.id);
 
     const countLabel =
       lane.id === 'done'
@@ -896,6 +1033,18 @@ function renderKanban() {
     `;
 
     const stack = column.querySelector('.task-stack');
+    stack.dataset.lane = lane.id;
+    if (lane.id !== 'done') {
+      stack.classList.add('reorderable-stack');
+      stack.addEventListener('dragover', handleTaskStackDragOver);
+      stack.addEventListener('drop', handleTaskStackDrop);
+      stack.addEventListener('dragleave', (event) => {
+        if (!stack.contains(event.relatedTarget)) {
+          stack.classList.remove('drag-over-stack');
+          stack.querySelectorAll('.drop-target-before').forEach((card) => card.classList.remove('drop-target-before'));
+        }
+      });
+    }
     if (!tasks.length) {
       stack.innerHTML = `<div class="empty-state">${lane.id === 'done' ? 'No completed tasks yet.' : 'No tasks in this lane.'}</div>`;
     }
@@ -906,10 +1055,18 @@ function renderKanban() {
       const notesNode = node.querySelector('.task-notes');
 
       node.dataset.taskId = task.id;
+      node.dataset.lane = lane.id;
       node.setAttribute('tabindex', '0');
       node.setAttribute('role', 'button');
       node.setAttribute('aria-label', `Open details for ${task.title}`);
       node.classList.add('compact-task-card');
+      node.draggable = isTaskCardDraggable(task, lane.id);
+
+      if (node.draggable) {
+        node.classList.add('draggable-task-card');
+        node.addEventListener('dragstart', handleTaskCardDragStart);
+        node.addEventListener('dragend', handleTaskCardDragEnd);
+      }
 
       const boardProject = getCurrentTaskBoardProject();
       const ownerNode = node.querySelector('.task-owner');
@@ -1284,7 +1441,7 @@ function renderProjectRepoFields(entries = []) {
             </label>
             <label>
               Role tag
-              <input type="text" data-project-repo-role value="${escapeHtml(repo.role || '')}" placeholder="frontend, backend, service" />
+              <input type="text" data-project-repo-role value="${escapeHtml(repo.role || '')}" placeholder="frontend, backend, service, docs, hq" />
             </label>
             <label class="wide">
               Repository URL
@@ -1423,7 +1580,7 @@ function renderTaskBoardContext() {
   taskBoardShell.hidden = false;
   taskBoardEmpty.hidden = true;
   if (taskBoardTitle) taskBoardTitle.textContent = `${project.name} task intake`;
-  if (taskBoardDescription) taskBoardDescription.textContent = `${getProjectWorkflowLabel(project)} · ${getTasksForProject(project).length} task${getTasksForProject(project).length === 1 ? '' : 's'} currently on this board.`;
+  if (taskBoardDescription) taskBoardDescription.textContent = `${getProjectWorkflowLabel(project)} · ${getTasksForProject(project).length} task${getTasksForProject(project).length === 1 ? '' : 's'} currently on this board. Drag cards within a lane to set execution order.`;
   if (taskBoardContextPill) taskBoardContextPill.textContent = `Project: ${project.name}`;
 }
 

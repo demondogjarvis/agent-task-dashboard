@@ -30,6 +30,20 @@ const lanes = [
 ];
 
 const priorityRank = { critical: 4, high: 3, medium: 2, low: 1 };
+const TASK_LANE_ORDER_STEP = 1024;
+const REORDERABLE_LANES = new Set(laneOrder.filter((lane) => lane !== 'done'));
+const DOCUMENTATION_REPO_HINTS = ['doc', 'docs', 'documentation', 'hq', 'spec', 'specs', 'plan', 'planning', 'brief', 'product', 'architecture', 'adr'];
+const DOCUMENTATION_ENTRYPOINTS = [
+  'README.md',
+  'docs/README.md',
+  'docs/vision/product-vision.md',
+  'docs/architecture/overview.md',
+  'docs/product/mvp-scope.md',
+  'docs/delivery/first-proof-slice.md',
+  'docs/decisions/README.md',
+  'docs/repo-map.md',
+  'docs/engineering-principles.md',
+];
 
 const agentCatalog = [
   {
@@ -328,6 +342,7 @@ async function handleApi(req, res, url) {
     }
 
     const preferredAgent = agentCatalog.find((agent) => agent.id === String(body.agentId || '').trim()) || null;
+    const owner = String(body.owner || '').trim() || 'Unassigned stream';
 
     const task = normalizeTaskRecord({
       id: nextId('task'),
@@ -336,8 +351,9 @@ async function handleApi(req, res, url) {
       priority: sanitizePriority(body.priority),
       skill: preferredAgent ? preferredAgent.specialty : sanitizeSkill(body.skill),
       preferredAgentId: preferredAgent?.id || null,
-      owner: String(body.owner || '').trim() || 'Unassigned stream',
+      owner,
       lane: 'definition',
+      laneOrder: 0,
       assignedAgentId: null,
       runStatus: 'idle',
       createdAt: Date.now(),
@@ -351,6 +367,7 @@ async function handleApi(req, res, url) {
     });
 
     state.tasks.unshift(task);
+    placeTaskInLane(task, { owner, lane: 'definition', position: 'top' });
     pushActivity(`New task created in Definition: ${task.title}.`, 'info');
     await persistState();
     sendJson(res, 201, { ok: true, task });
@@ -416,7 +433,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|assign|reassign|update|comment|delete)$/);
+  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|reorder|assign|reassign|update|comment|delete)$/);
   if (!taskRoute) {
     sendJson(res, 404, { error: 'not_found' });
     return;
@@ -438,7 +455,8 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: 'invalid_state', message: 'This parent task has been split. Move the child tasks forward instead.' });
       return;
     }
-    task.lane = 'ready';
+    placeTaskInLane(task, { owner: task.owner, lane: 'ready', position: 'bottom' });
+    rebalanceLaneOrders(task.owner, 'approval');
     task.updatedAt = Date.now();
     pushActivity(`${task.title} approved. Agents may now claim it.`, 'info');
     await persistState();
@@ -460,6 +478,43 @@ async function handleApi(req, res, url) {
     }
     await persistState();
     sendJson(res, 200, { ok: true, task, publish: moved.publish || null });
+    return;
+  }
+
+  if (action === 'reorder') {
+    if (activeRuns.has(task.id) || task.runStatus === 'running') {
+      sendJson(res, 400, { error: 'invalid_state', message: 'Running tasks cannot be reordered right now.' });
+      return;
+    }
+
+    if (!REORDERABLE_LANES.has(task.lane)) {
+      sendJson(res, 400, { error: 'invalid_state', message: 'This lane does not support manual ordering.' });
+      return;
+    }
+
+    const body = await readJsonBody(req);
+    const beforeTaskId = String(body.beforeTaskId || '').trim() || null;
+    const afterTaskId = String(body.afterTaskId || '').trim() || null;
+
+    if (beforeTaskId && afterTaskId) {
+      sendJson(res, 400, { error: 'validation', message: 'Provide only beforeTaskId or afterTaskId, not both.' });
+      return;
+    }
+
+    try {
+      placeTaskInLane(task, {
+        owner: task.owner,
+        lane: task.lane,
+        beforeTaskId,
+        afterTaskId,
+      });
+      task.updatedAt = Date.now();
+      pushActivity(`${task.title} was reordered in ${laneTitle(task.lane)}.`, 'info');
+      await persistState();
+      sendJson(res, 200, { ok: true, task });
+    } catch (error) {
+      sendJson(res, 400, { error: 'validation', message: error instanceof Error ? error.message : String(error) });
+    }
     return;
   }
 
@@ -516,10 +571,13 @@ async function handleApi(req, res, url) {
     task.updatedAt = Date.now();
 
     if (['ready', 'inprogress', 'review'].includes(task.lane)) {
+      const previousLane = task.lane;
       await stopTaskReviewEnvironment(task.id, { quiet: true });
-      task.lane = 'ready';
+      placeTaskInLane(task, { owner: task.owner, lane: 'ready', position: 'bottom' });
+      rebalanceLaneOrders(task.owner, previousLane);
       task.assignedAgentId = null;
       task.runStatus = 'idle';
+      task.completedAt = null;
     }
 
     pushActivity(
@@ -551,16 +609,25 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const previousOwner = task.owner;
+    const previousLane = task.lane;
+
     task.title = title;
     task.notes = String(body.notes || '').trim();
     task.priority = sanitizePriority(body.priority);
     const nextOwner = String(body.owner || '').trim() || 'Unassigned stream';
     const nextBlockedBy = validateTaskDependencies(task, body.blockedBy, nextOwner);
-    task.owner = nextOwner;
     task.preferredAgentId = preferredAgent?.id || null;
     task.skill = preferredAgent ? preferredAgent.specialty : task.skill;
     task.blockedBy = nextBlockedBy;
     task.updatedAt = Date.now();
+
+    if (nextOwner !== previousOwner) {
+      placeTaskInLane(task, { owner: nextOwner, lane: previousLane, position: 'bottom' });
+      rebalanceLaneOrders(previousOwner, previousLane);
+    } else {
+      task.owner = nextOwner;
+    }
 
     pushActivity(`${task.title} was updated.`, 'info');
     await persistState();
@@ -599,12 +666,17 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    const previousOwner = task.owner;
+    const previousLane = task.lane;
     await stopTaskReviewEnvironment(task.id, { quiet: true });
     state.tasks = state.tasks.filter((item) => item.id !== task.id);
     state.tasks.forEach((item) => {
       item.blockedBy = normalizeTaskDependencyIds(item.blockedBy).filter((id) => id !== task.id);
       item.splitChildren = normalizeTaskDependencyIds(item.splitChildren).filter((id) => id !== task.id);
     });
+    if (REORDERABLE_LANES.has(previousLane)) {
+      rebalanceLaneOrders(previousOwner, previousLane);
+    }
     pushActivity(`${task.title} was deleted from the board.`, 'warning');
     await persistState();
     sendJson(res, 200, { ok: true, taskId: task.id });
@@ -619,6 +691,8 @@ async function moveTask(task, direction) {
     return { ok: false, message: 'This task is actively running and cannot be moved manually.' };
   }
 
+  const previousLane = task.lane;
+  const previousOwner = task.owner;
   const index = laneOrder.indexOf(task.lane);
   const nextIndex = index + direction;
   if (nextIndex < 0 || nextIndex >= laneOrder.length) {
@@ -646,8 +720,11 @@ async function moveTask(task, direction) {
       return publish;
     }
     task.lane = 'done';
+    task.laneOrder = null;
     task.assignedAgentId = null;
+    task.completedAt = Date.now();
     task.updatedAt = Date.now();
+    rebalanceLaneOrders(previousOwner, previousLane);
     pushActivity(`${task.title} marked Done after review.${publish.message ? ` ${publish.message}` : ''}`, 'info');
     return { ok: true, publish };
   }
@@ -657,15 +734,19 @@ async function moveTask(task, direction) {
   }
 
   if (task.lane === 'inprogress' && direction < 0) {
-    task.lane = 'ready';
+    placeTaskInLane(task, { owner: task.owner, lane: 'ready', position: 'bottom' });
+    rebalanceLaneOrders(previousOwner, previousLane);
     task.assignedAgentId = null;
     task.runStatus = 'idle';
+    task.completedAt = null;
     task.updatedAt = Date.now();
     pushActivity(`${task.title} moved back to Ready for Agents.`, 'warning');
     return { ok: true };
   }
 
-  task.lane = nextLane;
+  placeTaskInLane(task, { owner: task.owner, lane: nextLane, position: 'bottom' });
+  rebalanceLaneOrders(previousOwner, previousLane);
+  task.completedAt = null;
   task.updatedAt = Date.now();
   pushActivity(`${task.title} moved to ${laneTitle(nextLane)}.`, 'info');
   return { ok: true };
@@ -764,8 +845,10 @@ async function launchTaskRun(task, agent) {
 
   activeRuns.set(task.id, run);
   task.assignedAgentId = agent.id;
-  task.lane = 'inprogress';
+  placeTaskInLane(task, { owner: task.owner, lane: 'inprogress', position: 'bottom' });
+  rebalanceLaneOrders(task.owner, 'ready');
   task.runStatus = 'running';
+  task.completedAt = null;
   task.updatedAt = Date.now();
   task.lastRun = {
     id: run.id,
@@ -812,9 +895,11 @@ async function launchTaskRun(task, agent) {
     const finishedAt = Date.now();
     const failureDetails = error instanceof Error ? error.message : String(error);
     task.updatedAt = finishedAt;
-    task.lane = 'ready';
+    placeTaskInLane(task, { owner: task.owner, lane: 'ready', position: 'bottom' });
+    rebalanceLaneOrders(task.owner, 'inprogress');
     task.runStatus = 'failed';
     task.assignedAgentId = null;
+    task.completedAt = null;
     task.lastRun = {
       id: run.id,
       status: 'failed',
@@ -891,8 +976,10 @@ async function launchTaskRun(task, agent) {
     });
 
     if (hasPayload) {
-      task.lane = 'review';
+      placeTaskInLane(task, { owner: task.owner, lane: 'review', position: 'bottom' });
+      rebalanceLaneOrders(task.owner, 'inprogress');
       task.runStatus = 'succeeded';
+      task.completedAt = null;
       task.lastRun = {
         id: run.id,
         status: 'succeeded',
@@ -949,9 +1036,11 @@ async function launchTaskRun(task, agent) {
       }
       pushActivity(`${agent.name} finished ${task.title}. Review is ready.`, 'info');
     } else {
-      task.lane = 'ready';
+      placeTaskInLane(task, { owner: task.owner, lane: 'ready', position: 'bottom' });
+      rebalanceLaneOrders(task.owner, 'inprogress');
       task.runStatus = 'failed';
       task.assignedAgentId = null;
+      task.completedAt = null;
       task.lastRun = {
         id: run.id,
         status: 'failed',
@@ -1002,6 +1091,131 @@ function limitPromptSection(text, maxLength = 4000) {
   return text.length > maxLength ? `${text.slice(0, maxLength).trim()}\n[truncated]` : text;
 }
 
+function isDocumentationRepo(repo) {
+  const haystack = [repo?.role, repo?.label]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+
+  return DOCUMENTATION_REPO_HINTS.some((hint) => haystack.includes(hint));
+}
+
+async function getRepoDocumentationEntryPoints(repoDir) {
+  const entryPoints = [];
+
+  for (const relativePath of DOCUMENTATION_ENTRYPOINTS) {
+    const absolutePath = path.join(repoDir, relativePath);
+    if (await pathExists(absolutePath)) {
+      entryPoints.push({ relativePath, absolutePath });
+    }
+  }
+
+  return entryPoints;
+}
+
+function getTaskSortFallback(a, b) {
+  if (a.lane === 'done' || b.lane === 'done') {
+    return getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority];
+  }
+
+  return priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0);
+}
+
+function compareTasksForLane(a, b) {
+  const aLaneOrder = Number.isFinite(Number(a?.laneOrder)) ? Number(a.laneOrder) : null;
+  const bLaneOrder = Number.isFinite(Number(b?.laneOrder)) ? Number(b.laneOrder) : null;
+
+  if (aLaneOrder !== null && bLaneOrder !== null && aLaneOrder !== bLaneOrder) {
+    return aLaneOrder - bLaneOrder;
+  }
+
+  if (aLaneOrder !== null && bLaneOrder === null) {
+    return -1;
+  }
+
+  if (aLaneOrder === null && bLaneOrder !== null) {
+    return 1;
+  }
+
+  return getTaskSortFallback(a, b);
+}
+
+function getLaneScopedTasks(owner, lane, { excludeTaskId = null } = {}) {
+  return state.tasks
+    .filter((task) => task.owner === owner)
+    .filter((task) => task.lane === lane)
+    .filter((task) => !excludeTaskId || task.id !== excludeTaskId)
+    .sort(compareTasksForLane);
+}
+
+function rebalanceLaneOrders(owner, lane) {
+  getLaneScopedTasks(owner, lane).forEach((task, index) => {
+    task.laneOrder = (index + 1) * TASK_LANE_ORDER_STEP;
+  });
+}
+
+function placeTaskInLane(task, { owner = task.owner, lane = task.lane, beforeTaskId = null, afterTaskId = null, position = 'bottom' } = {}) {
+  const laneTasks = getLaneScopedTasks(owner, lane, { excludeTaskId: task.id });
+  let insertIndex = laneTasks.length;
+
+  if (beforeTaskId) {
+    const targetIndex = laneTasks.findIndex((candidate) => candidate.id === beforeTaskId);
+    if (targetIndex === -1) {
+      throw new Error('Could not place the task before the requested board item.');
+    }
+    insertIndex = targetIndex;
+  } else if (afterTaskId) {
+    const targetIndex = laneTasks.findIndex((candidate) => candidate.id === afterTaskId);
+    if (targetIndex === -1) {
+      throw new Error('Could not place the task after the requested board item.');
+    }
+    insertIndex = targetIndex + 1;
+  } else if (position === 'top') {
+    insertIndex = 0;
+  }
+
+  task.owner = owner;
+  task.lane = lane;
+  laneTasks.splice(insertIndex, 0, task);
+  laneTasks.forEach((candidate, index) => {
+    candidate.laneOrder = (index + 1) * TASK_LANE_ORDER_STEP;
+  });
+}
+
+function hydrateTaskLaneOrders(tasks) {
+  const laneGroups = new Map();
+
+  for (const task of tasks) {
+    if (!REORDERABLE_LANES.has(task.lane)) {
+      continue;
+    }
+
+    const key = `${task.owner}::${task.lane}`;
+    if (!laneGroups.has(key)) {
+      laneGroups.set(key, []);
+    }
+    laneGroups.get(key).push(task);
+  }
+
+  laneGroups.forEach((group) => {
+    const existingOrders = group
+      .map((task) => (Number.isFinite(Number(task.laneOrder)) ? Number(task.laneOrder) : null))
+      .filter((value) => value !== null);
+    const needsHydration = existingOrders.length !== group.length || new Set(existingOrders).size !== existingOrders.length;
+
+    if (!needsHydration) {
+      return;
+    }
+
+    group
+      .slice()
+      .sort(getTaskSortFallback)
+      .forEach((task, index) => {
+        task.laneOrder = (index + 1) * TASK_LANE_ORDER_STEP;
+      });
+  });
+}
+
 function buildTaskPrompt(task, agent, executionContext = null) {
   const commentLines = Array.isArray(task.comments) && task.comments.length
     ? task.comments.map((comment) => `- ${comment.author}: ${comment.text}`).join('\n')
@@ -1019,9 +1233,30 @@ function buildTaskPrompt(task, agent, executionContext = null) {
         .join('\n\n')
     : 'No previous run context.';
 
-  const linkedRepos = executionContext?.project ? getProjectRepos(executionContext.project) : [];
+  const linkedRepos = Array.isArray(executionContext?.linkedRepos) ? executionContext.linkedRepos : [];
   const repoSummary = linkedRepos.length
-    ? linkedRepos.map((repo) => `- ${repo.label || repo.role || 'repo'}${repo.primary ? ' (primary)' : ''}: ${repo.url}`).join('\n')
+    ? linkedRepos
+        .map((item) => {
+          const repo = item.repo || {};
+          const details = [repo.url, item.localPath ? `local ${item.localPath}` : null].filter(Boolean).join(' · ');
+          return `- ${repo.label || repo.role || 'repo'}${repo.primary ? ' (primary)' : ''}${item.documentation ? ' (documentation)' : ''}: ${details}`;
+        })
+        .join('\n')
+    : null;
+  const documentationRepos = linkedRepos.filter((item) => item.documentation);
+  const documentationSection = documentationRepos.length
+    ? [
+        'Documentation to review before coding:',
+        ...documentationRepos.flatMap((item) => {
+          const repo = item.repo || {};
+          const heading = `- ${repo.label || repo.role || 'documentation repo'} (${item.localPath})`;
+          const entryPoints = item.entryPoints?.length
+            ? item.entryPoints.map((entry) => `  • ${entry.absolutePath}`)
+            : ['  • Review this repo starting from README.md and docs/README.md if present.'];
+          return [heading, ...entryPoints];
+        }),
+        'Read the relevant documentation before making code changes. In "What I did", begin with a line that starts "Docs reviewed:" and list the files you actually used.',
+      ].join('\n')
     : null;
   const repoSection = executionContext?.project
     ? [
@@ -1049,6 +1284,7 @@ function buildTaskPrompt(task, agent, executionContext = null) {
     `Task notes: ${task.notes || 'No additional notes provided.'}`,
     '',
     repoSection,
+    documentationSection,
     'Task comments:',
     commentLines,
     '',
@@ -1737,15 +1973,29 @@ async function prepareTaskExecutionContext(task) {
   const ensured = await ensureBaseRepoClone(project);
   const repoDir = ensured.repoDir;
   const branchName = `task-${sanitizePathSegment(task.id)}`;
+  const projectRepos = getProjectRepos(project);
+  const linkedRepos = [];
 
   if (!(await repoHasCommits(repoDir))) {
     await runCommand(GIT_BIN, ['checkout', '--orphan', branchName], { cwd: repoDir }).catch(() => {});
+    for (const repo of projectRepos) {
+      const linkedRepoDir = repo.url === primaryRepo.url
+        ? repoDir
+        : (await ensureProjectRepoClone(project, repo)).repoDir;
+      linkedRepos.push({
+        repo,
+        localPath: linkedRepoDir,
+        documentation: isDocumentationRepo(repo),
+        entryPoints: await getRepoDocumentationEntryPoints(linkedRepoDir),
+      });
+    }
     return {
       cwd: repoDir,
       project,
       primaryRepo,
       repoDir,
       branchName,
+      linkedRepos,
     };
   }
 
@@ -1760,12 +2010,25 @@ async function prepareTaskExecutionContext(task) {
     await runCommand(GIT_BIN, ['worktree', 'add', '-B', branchName, worktreeDir, baseRef], { cwd: repoDir });
   }
 
+  for (const repo of projectRepos) {
+    const linkedRepoDir = repo.url === primaryRepo.url
+      ? worktreeDir
+      : (await ensureProjectRepoClone(project, repo)).repoDir;
+    linkedRepos.push({
+      repo,
+      localPath: linkedRepoDir,
+      documentation: isDocumentationRepo(repo),
+      entryPoints: await getRepoDocumentationEntryPoints(linkedRepoDir),
+    });
+  }
+
   return {
     cwd: worktreeDir,
     project,
     primaryRepo,
     repoDir,
     branchName,
+    linkedRepos,
   };
 }
 
@@ -2099,6 +2362,11 @@ async function loadOrCreateState() {
   try {
     const raw = await fs.readFile(STATE_PATH, 'utf8');
     const parsed = JSON.parse(raw);
+    const tasks = Array.isArray(parsed.tasks)
+      ? parsed.tasks.map((task) => normalizeTaskRecord(task))
+      : [];
+    hydrateTaskLaneOrders(tasks);
+
     return {
       ...parsed,
       projects: Array.isArray(parsed.projects)
@@ -2119,9 +2387,7 @@ async function loadOrCreateState() {
               };
             })
         : [],
-      tasks: Array.isArray(parsed.tasks)
-        ? parsed.tasks.map((task) => normalizeTaskRecord(task))
-        : [],
+      tasks,
       activity: Array.isArray(parsed.activity) ? parsed.activity : [],
     };
   } catch {
@@ -2285,6 +2551,8 @@ function normalizeTaskRecord(task) {
     blockedBy: normalizeTaskDependencyIds(task.blockedBy),
     splitChildren: normalizeTaskDependencyIds(task.splitChildren),
     parentTaskId: task.parentTaskId ? String(task.parentTaskId) : null,
+    laneOrder: Number.isFinite(Number(task.laneOrder)) ? Number(task.laneOrder) : null,
+    completedAt: Number(task.completedAt || 0) || null,
     repoRole: String(task.repoRole || '').trim(),
   };
 }
