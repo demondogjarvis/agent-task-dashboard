@@ -372,6 +372,32 @@ function getTaskBoardTasks() {
   return project ? getTasksForProject(project) : [];
 }
 
+function getTaskById(taskId) {
+  return (dashboard.tasks || []).find((task) => task.id === taskId) || null;
+}
+
+function getBlockingTasks(task) {
+  return (Array.isArray(task?.blockedBy) ? task.blockedBy : [])
+    .map((taskId) => getTaskById(taskId))
+    .filter((candidate) => candidate && candidate.lane !== 'done');
+}
+
+function isTaskBlocked(task) {
+  return getBlockingTasks(task).length > 0;
+}
+
+function isSplitParentTask(task) {
+  return Array.isArray(task?.splitChildren) && task.splitChildren.length > 0;
+}
+
+function formatBlockingSummary(task) {
+  const blockers = getBlockingTasks(task);
+  if (!blockers.length) {
+    return '';
+  }
+  return `Blocked by ${blockers.map((item) => item.title).join(', ')}`;
+}
+
 function getTaskBoardApprovals() {
   return getTaskBoardTasks().filter((task) => task.lane === 'approval');
 }
@@ -679,6 +705,8 @@ function buildTaskActions(task, options = {}) {
   const actions = [];
   const laneIndex = dashboard.lanes.findIndex((lane) => lane.id === task.lane);
   const isRunning = task.runStatus === 'running';
+  const blocked = isTaskBlocked(task);
+  const splitParent = isSplitParentTask(task);
   const project = getProjectForTask(task);
   const reviewServices = getProjectReviewServices(project);
   const reviewEnvironment = task.reviewEnvironment || null;
@@ -689,9 +717,9 @@ function buildTaskActions(task, options = {}) {
   }
 
   if (task.lane === 'approval') {
-    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="approve" data-task-id="${task.id}">Approve</button>`);
+    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="approve" data-task-id="${task.id}" ${splitParent ? 'disabled title="Use the split child tasks instead."' : ''}>Approve</button>`);
   } else if (task.lane === 'ready') {
-    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="assign" data-task-id="${task.id}">Assign</button>`);
+    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="assign" data-task-id="${task.id}" ${blocked ? `disabled title="${escapeHtml(formatBlockingSummary(task))}"` : ''}>${blocked ? 'Blocked' : 'Assign'}</button>`);
   } else if (task.lane === 'review') {
     if (reviewEnvironment?.openUrl && reviewEnvironment.status !== 'stopping') {
       actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="open-review" data-task-id="${task.id}">Open service</button>`);
@@ -702,6 +730,8 @@ function buildTaskActions(task, options = {}) {
       actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="start-review" data-task-id="${task.id}">${reviewLabel}</button>`);
     }
     actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
+  } else if (task.lane === 'definition' && !splitParent) {
+    actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="split-task" data-task-id="${task.id}">Split with Jarvis</button>`);
   } else if (!isRunning && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
     actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Next</button>`);
   }

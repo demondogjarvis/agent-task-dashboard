@@ -329,7 +329,7 @@ async function handleApi(req, res, url) {
 
     const preferredAgent = agentCatalog.find((agent) => agent.id === String(body.agentId || '').trim()) || null;
 
-    const task = {
+    const task = normalizeTaskRecord({
       id: nextId('task'),
       title,
       notes: String(body.notes || '').trim(),
@@ -344,12 +344,33 @@ async function handleApi(req, res, url) {
       updatedAt: Date.now(),
       lastRun: null,
       comments: [],
-    };
+      blockedBy: [],
+      splitChildren: [],
+      parentTaskId: null,
+      repoRole: String(body.repoRole || '').trim(),
+    });
 
     state.tasks.unshift(task);
     pushActivity(`New task created in Definition: ${task.title}.`, 'info');
     await persistState();
     sendJson(res, 201, { ok: true, task });
+    return;
+  }
+
+  const splitRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/split$/);
+  if (splitRoute && req.method === 'POST') {
+    const task = state.tasks.find((item) => item.id === splitRoute[1]);
+    if (!task) {
+      sendJson(res, 404, { error: 'not_found', message: 'Task not found.' });
+      return;
+    }
+
+    try {
+      const createdTasks = await splitTaskWithJarvis(task);
+      sendJson(res, 201, { ok: true, tasks: createdTasks, parentTask: task });
+    } catch (error) {
+      sendJson(res, 400, { error: 'split_failed', message: error instanceof Error ? error.message : String(error) });
+    }
     return;
   }
 
@@ -395,6 +416,10 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: 'invalid_state', message: 'Only approval-lane tasks can be approved.' });
       return;
     }
+    if (isSplitParentTask(task)) {
+      sendJson(res, 400, { error: 'invalid_state', message: 'This parent task has been split. Move the child tasks forward instead.' });
+      return;
+    }
     task.lane = 'ready';
     task.updatedAt = Date.now();
     pushActivity(`${task.title} approved. Agents may now claim it.`, 'info');
@@ -424,6 +449,11 @@ async function handleApi(req, res, url) {
     const body = await readJsonBody(req);
     if (task.lane !== 'ready') {
       sendJson(res, 400, { error: 'invalid_state', message: 'Only Ready for Agents tasks can be assigned.' });
+      return;
+    }
+    const blockers = getUnresolvedBlockerIds(task);
+    if (blockers.length) {
+      sendJson(res, 400, { error: 'blocked', message: `This task is blocked by ${blockers.length} unfinished task${blockers.length === 1 ? '' : 's'}.` });
       return;
     }
     const agent = pickAgentForTask(task, body.agentId ? String(body.agentId) : null);
@@ -550,6 +580,10 @@ async function handleApi(req, res, url) {
 
     await stopTaskReviewEnvironment(task.id, { quiet: true });
     state.tasks = state.tasks.filter((item) => item.id !== task.id);
+    state.tasks.forEach((item) => {
+      item.blockedBy = normalizeTaskDependencyIds(item.blockedBy).filter((id) => id !== task.id);
+      item.splitChildren = normalizeTaskDependencyIds(item.splitChildren).filter((id) => id !== task.id);
+    });
     pushActivity(`${task.title} was deleted from the board.`, 'warning');
     await persistState();
     sendJson(res, 200, { ok: true, taskId: task.id });
@@ -571,6 +605,10 @@ async function moveTask(task, direction) {
   }
 
   const nextLane = laneOrder[nextIndex];
+
+  if (direction > 0 && isSplitParentTask(task) && ['approval', 'ready', 'inprogress', 'review', 'done'].includes(nextLane)) {
+    return { ok: false, message: 'This parent task has been split. Move the child tasks forward instead.' };
+  }
 
   if (task.lane === 'approval' && nextLane === 'ready') {
     return { ok: false, message: 'Use the approval action for approval-lane tasks.' };
@@ -2061,10 +2099,7 @@ async function loadOrCreateState() {
             })
         : [],
       tasks: Array.isArray(parsed.tasks)
-        ? parsed.tasks.map((task) => ({
-            ...task,
-            comments: Array.isArray(task.comments) ? task.comments : [],
-          }))
+        ? parsed.tasks.map((task) => normalizeTaskRecord(task))
         : [],
       activity: Array.isArray(parsed.activity) ? parsed.activity : [],
     };
@@ -2212,6 +2247,191 @@ function getProjectPrimaryRepo(project) {
 
 function getProjectRepoUrl(project) {
   return getProjectPrimaryRepo(project)?.url || '';
+}
+
+function normalizeTaskDependencyIds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))];
+}
+
+function normalizeTaskRecord(task) {
+  return {
+    ...task,
+    comments: Array.isArray(task.comments) ? task.comments : [],
+    blockedBy: normalizeTaskDependencyIds(task.blockedBy),
+    splitChildren: normalizeTaskDependencyIds(task.splitChildren),
+    parentTaskId: task.parentTaskId ? String(task.parentTaskId) : null,
+    repoRole: String(task.repoRole || '').trim(),
+  };
+}
+
+function resolveTaskSkillFromRepoRole(role, fallbackSkill = 'product') {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (['frontend', 'web', 'ui', 'client'].includes(normalized)) return 'frontend';
+  if (['backend', 'api', 'server', 'data'].includes(normalized)) return 'backend';
+  if (['service', 'ops', 'infra', 'platform', 'devops'].includes(normalized)) return 'ops';
+  if (['qa', 'test', 'testing'].includes(normalized)) return 'qa';
+  if (['automation', 'workflow'].includes(normalized)) return 'automation';
+  return sanitizeSkill(fallbackSkill);
+}
+
+function findPreferredAgentIdForSkill(skill) {
+  return agentCatalog.find((agent) => agent.specialty === sanitizeSkill(skill))?.id || null;
+}
+
+function findTaskById(taskId) {
+  return state.tasks.find((task) => task.id === taskId) || null;
+}
+
+function getUnresolvedBlockerIds(task) {
+  return normalizeTaskDependencyIds(task?.blockedBy).filter((taskId) => {
+    const blocker = findTaskById(taskId);
+    return blocker && blocker.lane !== 'done';
+  });
+}
+
+function isSplitParentTask(task) {
+  return normalizeTaskDependencyIds(task?.splitChildren).length > 0;
+}
+
+function normalizeRepoRoleName(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized || ['app', 'primary', 'repo'].includes(normalized)) return 'implementation';
+  if (['web', 'ui', 'client'].includes(normalized)) return 'frontend';
+  if (['api', 'server', 'data'].includes(normalized)) return 'backend';
+  if (['infra', 'platform', 'devops'].includes(normalized)) return 'service';
+  return normalized;
+}
+
+function repoRoleTitle(role) {
+  const normalized = normalizeRepoRoleName(role);
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function buildSplitTaskNotes(parentTask, role, blockers = []) {
+  const roleTitle = repoRoleTitle(role);
+  const blockerLine = blockers.length
+    ? `Blocked by: ${blockers.map((task) => task.title).join(', ')}`
+    : 'Blocked by: none';
+  const scopeByRole = {
+    backend: '- Implement the backend or API changes needed for this feature.\n- Keep contracts clear for any dependent frontend work.\n- Stay within the backend repo role unless explicitly required.',
+    frontend: '- Implement the UI or client-side changes for this feature.\n- Consume the agreed backend contract if one exists.\n- Stay within the frontend repo role unless explicitly required.',
+    service: '- Implement service, infrastructure, or runtime changes needed to support the feature.\n- Keep operational assumptions explicit for dependent tasks.\n- Stay within the service or platform repo role unless explicitly required.',
+    implementation: '- Implement the changes needed for this part of the feature.\n- Keep repo boundaries clear and document assumptions for dependent tasks.',
+  };
+
+  return [
+    `Split from parent task: ${parentTask.title}`,
+    parentTask.notes ? `Original request:\n${parentTask.notes}` : null,
+    `Implementation area: ${roleTitle}`,
+    blockerLine,
+    'Scope for this task:',
+    scopeByRole[normalizeRepoRoleName(role)] || scopeByRole.implementation,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function suggestSplitRolesForProject(project, task) {
+  const repos = getProjectRepos(project);
+  const seen = new Set();
+  const roles = repos
+    .map((repo) => normalizeRepoRoleName(repo.role || repo.label || ''))
+    .filter((role) => {
+      if (!role || seen.has(role)) return false;
+      seen.add(role);
+      return true;
+    });
+
+  if (!roles.length) {
+    roles.push(normalizeRepoRoleName(task?.repoRole || task?.skill || 'implementation'));
+  }
+
+  const ordered = roles.slice().sort((a, b) => {
+    const rank = { service: 1, backend: 2, implementation: 3, frontend: 4, qa: 5 };
+    return (rank[a] || 50) - (rank[b] || 50) || a.localeCompare(b);
+  });
+
+  if (ordered.includes('backend') && ordered.includes('frontend')) {
+    return ordered;
+  }
+
+  return ordered;
+}
+
+async function splitTaskWithJarvis(task) {
+  if (activeRuns.has(task.id) || task.runStatus === 'running') {
+    throw new Error('Running tasks cannot be split right now.');
+  }
+
+  if (isSplitParentTask(task)) {
+    throw new Error('This task has already been split into child tasks.');
+  }
+
+  const project = state.projects.find((item) => item.name === task.owner) || null;
+  if (!project) {
+    throw new Error('Attach this task to a project before splitting it.');
+  }
+
+  const roles = suggestSplitRolesForProject(project, task);
+  if (!roles.length) {
+    throw new Error('No implementation areas could be derived for this project yet.');
+  }
+
+  const now = Date.now();
+  const createdTasks = [];
+
+  roles.forEach((role, index) => {
+    const dependencyTargets = createdTasks.filter((candidate) => {
+      if (role === 'frontend') {
+        return ['backend', 'service', 'implementation'].includes(normalizeRepoRoleName(candidate.repoRole));
+      }
+      if (role === 'qa') {
+        return true;
+      }
+      return false;
+    });
+    const skill = resolveTaskSkillFromRepoRole(role, task.skill);
+    const childTask = normalizeTaskRecord({
+      id: nextId('task'),
+      title: `${task.title} (${repoRoleTitle(role)})`,
+      notes: buildSplitTaskNotes(task, role, dependencyTargets),
+      priority: task.priority,
+      skill,
+      preferredAgentId: findPreferredAgentIdForSkill(skill),
+      owner: task.owner,
+      lane: 'definition',
+      assignedAgentId: null,
+      runStatus: 'idle',
+      createdAt: now + index,
+      updatedAt: now + index,
+      lastRun: null,
+      comments: [],
+      blockedBy: dependencyTargets.map((candidate) => candidate.id),
+      splitChildren: [],
+      parentTaskId: task.id,
+      repoRole: role,
+    });
+    createdTasks.push(childTask);
+  });
+
+  state.tasks.unshift(...createdTasks.slice().reverse());
+  task.splitChildren = createdTasks.map((item) => item.id);
+  task.comments = Array.isArray(task.comments) ? task.comments : [];
+  task.comments.push({
+    id: nextId('comment'),
+    author: 'Jarvis',
+    text: `Split into ${createdTasks.length} child task${createdTasks.length === 1 ? '' : 's'}: ${createdTasks.map((item) => item.title).join(', ')}.`,
+    createdAt: now,
+  });
+  task.updatedAt = now;
+
+  pushActivity(`${task.title} was split into ${createdTasks.length} implementation task${createdTasks.length === 1 ? '' : 's'}.`, 'info');
+  await persistState();
+  return createdTasks;
 }
 
 function nextId(prefix) {
