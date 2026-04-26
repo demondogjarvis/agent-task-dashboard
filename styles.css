@@ -447,6 +447,14 @@ p {
   box-shadow: 0 10px 20px rgba(89, 48, 104, 0.08);
 }
 
+.button:disabled,
+.button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.58;
+  transform: none;
+  box-shadow: none;
+}
+
 .button.primary {
   color: #fffafc;
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));

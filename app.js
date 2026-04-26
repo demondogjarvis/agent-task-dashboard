@@ -732,7 +732,7 @@ function buildTaskActions(task, options = {}) {
     actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
   } else if (task.lane === 'definition' && !splitParent) {
     actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="split-task" data-task-id="${task.id}">Split with Jarvis</button>`);
-  } else if (!isRunning && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
+  } else if (!isRunning && !splitParent && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
     actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Next</button>`);
   }
 
@@ -748,9 +748,10 @@ function buildTaskActions(task, options = {}) {
 }
 
 function buildSummaryTaskCard(task, mode) {
+  const blocked = mode === 'ready' && isTaskBlocked(task);
   const actionLabel = mode === 'approval' ? 'Approve' : mode === 'ready' ? 'Assign' : null;
   const action = actionLabel
-    ? `<button class="button ${mode === 'approval' ? 'ghost' : 'primary'}" data-action="${mode === 'approval' ? 'approve' : 'assign'}" data-task-id="${task.id}">${actionLabel}</button>`
+    ? `<button class="button ${mode === 'approval' ? 'ghost' : 'primary'}" data-action="${mode === 'approval' ? 'approve' : 'assign'}" data-task-id="${task.id}" ${blocked ? `disabled title="${escapeHtml(formatBlockingSummary(task))}"` : ''}>${blocked ? 'Blocked' : actionLabel}</button>`
     : '';
 
   return `
@@ -895,6 +896,12 @@ function renderKanban() {
         if (task.reviewEnvironment.status === 'failed') {
           notesNode.classList.add('error-note');
         }
+      } else if (isTaskBlocked(task)) {
+        notesNode.textContent = formatBlockingSummary(task);
+        notesNode.classList.add('live-task-note');
+      } else if (isSplitParentTask(task)) {
+        notesNode.textContent = `Split into ${task.splitChildren.length} child task${task.splitChildren.length === 1 ? '' : 's'}. Use those for implementation.`;
+        notesNode.classList.add('live-task-note');
       } else {
         notesNode.remove();
       }
@@ -907,6 +914,13 @@ function renderKanban() {
           preferredTag.textContent = `Preferred: ${preferredAgent.name}`;
           node.querySelector('.task-meta').appendChild(preferredTag);
         }
+      }
+
+      if (task.repoRole) {
+        const roleTag = document.createElement('span');
+        roleTag.className = 'tag';
+        roleTag.textContent = task.repoRole;
+        node.querySelector('.task-meta').appendChild(roleTag);
       }
 
       if (lane.id === 'done') {
@@ -931,6 +945,20 @@ function renderKanban() {
         reviewTag.className = 'tag';
         reviewTag.textContent = `Review env: ${task.reviewEnvironment.status}`;
         node.querySelector('.task-meta').appendChild(reviewTag);
+      }
+
+      if (isTaskBlocked(task)) {
+        const blockedTag = document.createElement('span');
+        blockedTag.className = 'tag';
+        blockedTag.textContent = 'Blocked';
+        node.querySelector('.task-meta').appendChild(blockedTag);
+      }
+
+      if (isSplitParentTask(task)) {
+        const splitTag = document.createElement('span');
+        splitTag.className = 'tag';
+        splitTag.textContent = 'Split parent';
+        node.querySelector('.task-meta').appendChild(splitTag);
       }
 
       node.addEventListener('click', (event) => {
@@ -1531,13 +1559,17 @@ function renderTaskDetail() {
         .join(' • ')
     : '';
   const reviewFailure = reviewEnvironment?.services?.find((service) => service.error)?.error || '';
+  const blockingSummary = formatBlockingSummary(task);
   const detailTags = [
     task.priority,
     skillLabels[task.skill] || task.skill,
+    task.repoRole || null,
     boardProject ? null : task.owner || 'No stream',
     agent ? `${agent.emoji} ${agent.name}` : 'Unassigned',
     preferredAgent ? `Preferred: ${preferredAgent.name}` : null,
     reviewEnvironment ? `Review env: ${reviewEnvironment.status}` : null,
+    blockingSummary || null,
+    isSplitParentTask(task) ? `Split into ${task.splitChildren.length} child task${task.splitChildren.length === 1 ? '' : 's'}` : null,
     `${comments.length} comment${comments.length === 1 ? '' : 's'}`,
     task.lane === 'done' ? `Completed ${relativeTime(getTaskCompletionTime(task))}` : `Updated ${relativeTime(task.updatedAt)}`,
   ].filter(Boolean);
@@ -1561,6 +1593,7 @@ function renderTaskDetail() {
         ? 'Run status: running'
         : 'No run details recorded yet.',
     reviewEnvironment ? `Review environment: ${reviewEnvironment.message}` : '',
+    blockingSummary,
   ].filter(Boolean).join(' · ');
   taskDetailOutput.textContent = [
     outputPreview ? `Latest run: ${outputPreview}` : '',
@@ -1720,6 +1753,14 @@ document.addEventListener('click', (event) => {
   if (!taskButton) return;
 
   const { action, taskId } = taskButton.dataset;
+  if (action === 'split-task') {
+    const task = dashboard.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    const confirmed = window.confirm(`Split "${task.title}" into implementation subtasks for this project?`);
+    if (!confirmed) return;
+    mutate(() => api(`/api/tasks/${taskId}/split`, { method: 'POST' }));
+    return;
+  }
   if (action === 'move-left') {
     mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: -1 }) }));
   }
