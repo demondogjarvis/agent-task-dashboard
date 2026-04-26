@@ -214,10 +214,6 @@
                   <input id="project-name" name="name" type="text" placeholder="Agent Control" required />
                 </label>
                 <label>
-                  Repository URL
-                  <input id="project-repo-url" name="repoUrl" type="text" placeholder="https://github.com/acme/project" required />
-                </label>
-                <label>
                   Git commit rules
                   <select id="project-git-workflow" name="gitWorkflow">
                     <option value="direct-main">Update main directly</option>
@@ -225,6 +221,26 @@
                     <option value="agent-branch">Dedicated agent branch</option>
                   </select>
                 </label>
+                <section class="project-config-section wide">
+                  <div class="project-config-header">
+                    <div>
+                      <p class="eyebrow">Repositories</p>
+                      <h4>Link one or more GitHub repos to this project</h4>
+                    </div>
+                    <button type="button" id="add-project-repo-button" class="button ghost compact-action">Add repo</button>
+                  </div>
+                  <div id="project-repo-list" class="project-config-list"></div>
+                </section>
+                <section class="project-config-section wide">
+                  <div class="project-config-header">
+                    <div>
+                      <p class="eyebrow">Review run config</p>
+                      <h4>Describe how services should start for local review later</h4>
+                    </div>
+                    <button type="button" id="add-project-service-button" class="button ghost compact-action">Add service</button>
+                  </div>
+                  <div id="project-service-list" class="project-config-list"></div>
+                </section>
                 <label class="wide">
                   Notes
                   <textarea id="project-notes" name="notes" rows="3" placeholder="Optional context, conventions, or owner notes"></textarea>
