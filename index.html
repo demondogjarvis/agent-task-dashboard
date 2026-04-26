@@ -128,6 +128,7 @@
                     <p class="eyebrow">Task intake</p>
                     <h3 id="task-board-title">Define work before agents touch it</h3>
                     <p id="task-board-description" class="subtitle"></p>
+                    <div id="task-board-project-stats" class="project-stats-grid"></div>
                   </div>
                   <span class="pill neutral" id="task-board-context-pill">Approval gate enforced</span>
                 </div>
@@ -221,6 +222,10 @@
                     <option value="feature-branches" selected>Use feature branches</option>
                     <option value="agent-branch">Dedicated agent branch</option>
                   </select>
+                </label>
+                <label class="project-config-inline wide">
+                  <input id="project-keep-docs-up-to-date" name="keepDocumentationUpToDate" type="checkbox" />
+                  Keep documentation up to date automatically when tasks move to Done
                 </label>
                 <section class="project-config-section wide">
                   <div class="project-config-header">
@@ -468,6 +473,14 @@
         </section>
 
         <section class="task-detail-section">
+          <div class="task-comments-header">
+            <p class="eyebrow">Automation time</p>
+            <span id="task-detail-time-savings-pill" class="pill neutral">No estimate</span>
+          </div>
+          <div id="task-detail-time-metrics" class="task-detail-time-metrics"></div>
+        </section>
+
+        <section class="task-detail-section">
           <p class="eyebrow">Latest run</p>
           <p id="task-detail-run-status" class="task-detail-copy"></p>
           <p id="task-detail-output" class="task-run-note"></p>
@@ -543,6 +556,7 @@
           <span class="tag skill-tag"></span>
           <span class="tag assignee-tag"></span>
         </div>
+        <div class="task-time-meta" hidden></div>
         <div class="task-actions"></div>
       </article>
     </template>

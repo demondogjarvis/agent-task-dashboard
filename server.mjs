@@ -2278,6 +2278,37 @@ function normalizeSystemSession(session) {
   };
 }
 
+function buildProjectStats(project, tasks, activeRunByTaskId = new Map()) {
+  const projectTasks = tasks.filter((task) => task.owner === project.name);
+  const completedTasks = projectTasks.filter((task) => task.lane === 'done');
+  const trackedCompletedTasks = completedTasks
+    .map((task) => buildTaskTimeSummary(task, activeRunByTaskId.get(task.id) || null))
+    .filter(Boolean);
+
+  const agentTimeMs = trackedCompletedTasks.reduce((sum, item) => sum + item.actualAgentMs, 0);
+  const humanTimeMs = trackedCompletedTasks.reduce((sum, item) => sum + item.estimatedHumanMs, 0);
+  const timeSavedMs = trackedCompletedTasks.reduce((sum, item) => sum + item.estimatedSavedMs, 0);
+  const totalRunCount = projectTasks.reduce((sum, task) => sum + normalizeTaskTimeMetrics(task.timeMetrics).totalRunCount, 0);
+  const blockedTaskCount = projectTasks.filter((task) => task.lane !== 'done' && getUnresolvedBlockerIds(task).length > 0).length;
+  const activeTaskCount = projectTasks.filter((task) => ['inprogress', 'review'].includes(task.lane)).length;
+
+  return {
+    taskCount: projectTasks.length,
+    completedTaskCount: completedTasks.length,
+    trackedCompletedTaskCount: trackedCompletedTasks.length,
+    activeTaskCount,
+    blockedTaskCount,
+    totalRunCount,
+    agentTimeMs,
+    humanTimeMs,
+    timeSavedMs,
+    averageAgentTimeMs: trackedCompletedTasks.length ? Math.round(agentTimeMs / trackedCompletedTasks.length) : 0,
+    averageHumanTimeMs: trackedCompletedTasks.length ? Math.round(humanTimeMs / trackedCompletedTasks.length) : 0,
+    averageTimeSavedMs: trackedCompletedTasks.length ? Math.round(timeSavedMs / trackedCompletedTasks.length) : 0,
+    automationMultiplier: agentTimeMs > 0 ? humanTimeMs / agentTimeMs : null,
+  };
+}
+
 async function buildDashboardPayload() {
   if (!telemetryCache.updatedAt) {
     await refreshTelemetry();
@@ -2324,21 +2355,29 @@ async function buildDashboardPayload() {
 
   const totalSessionTokens = sessions.reduce((sum, item) => sum + Number(item.totalTokens || 0), 0);
   const activeRunByTaskId = new Map(Array.from(activeRuns.values()).map((run) => [run.taskId, run]));
+  const projects = [...state.projects]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((project) => ({
+      ...project,
+      stats: buildProjectStats(project, state.tasks, activeRunByTaskId),
+    }));
 
   return {
     generatedAt: Date.now(),
     storage: {
       runHistoryDbPath: runLogger.path,
     },
-    projects: [...state.projects].sort((a, b) => a.name.localeCompare(b.name)),
+    projects,
     lanes,
     tasks: [...state.tasks]
       .sort((a, b) => priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0))
       .map((task) => {
         const activeRun = activeRunByTaskId.get(task.id) || null;
         const reviewEnvironment = summarizeReviewSession(reviewSessions.get(task.id) || null);
+        const timeSummary = buildTaskTimeSummary(task, activeRun);
         return {
           ...task,
+          timeSummary,
           liveStatus: activeRun
             ? {
                 message: buildLiveRunStatus(task, activeRun),
@@ -2531,6 +2570,7 @@ async function loadOrCreateState() {
                 repos,
                 gitWorkflow: normalizeProjectWorkflow(project.gitWorkflow),
                 reviewServices: normalizeProjectReviewServices(project.reviewServices),
+                keepDocumentationUpToDate: Boolean(project.keepDocumentationUpToDate),
                 notes: String(project.notes || '').trim(),
                 createdAt: Number(project.createdAt || Date.now()),
                 updatedAt: Number(project.updatedAt || Date.now()),
@@ -2800,6 +2840,64 @@ function updateTaskTimeMetricsFromRun(task, { status, durationMs, finishedAt = D
 
   task.timeMetrics = metrics;
   return metrics;
+}
+
+function deriveTaskTimeMetricsFromHistory(task) {
+  const historyRuns = runLogger.getTaskRuns(task.id, 50);
+  if (!historyRuns.length) {
+    const lastRunDurationMs = task?.lastRun?.startedAt && task?.lastRun?.finishedAt
+      ? Math.max(0, Number(task.lastRun.finishedAt) - Number(task.lastRun.startedAt))
+      : 0;
+    if (!lastRunDurationMs) {
+      return normalizeTaskTimeMetrics(task?.timeMetrics);
+    }
+
+    const estimatedHumanMs = estimateHumanTaskDurationMs(task, lastRunDurationMs);
+    return normalizeTaskTimeMetrics({
+      actualAgentMs: lastRunDurationMs,
+      estimatedHumanMs,
+      estimatedSavedMs: estimatedHumanMs - lastRunDurationMs,
+      totalRunCount: 1,
+      successfulRunCount: task?.lastRun?.status === 'succeeded' ? 1 : 0,
+      failedRunCount: task?.lastRun?.status === 'failed' ? 1 : 0,
+      lastRunDurationMs,
+      lastSuccessfulRunDurationMs: task?.lastRun?.status === 'succeeded' ? lastRunDurationMs : 0,
+      estimateVersion: TASK_TIME_ESTIMATE_VERSION,
+      lastUpdatedAt: task?.lastRun?.finishedAt || task?.updatedAt || null,
+    });
+  }
+
+  const runs = historyRuns
+    .slice()
+    .sort((a, b) => (a.finishedAt || a.startedAt || 0) - (b.finishedAt || b.startedAt || 0));
+  const actualAgentMs = runs.reduce((sum, run) => sum + Math.max(0, Number(run.durationMs || 0) || 0), 0);
+  const successfulRuns = runs.filter((run) => run.status === 'succeeded');
+  const failedRuns = runs.filter((run) => run.status === 'failed');
+  const lastRun = runs.at(-1) || null;
+  const lastSuccessfulRun = successfulRuns.at(-1) || null;
+  const referenceAgentMs = Math.max(0, Number(lastSuccessfulRun?.durationMs || lastRun?.durationMs || 0) || 0);
+  const estimatedHumanMs = estimateHumanTaskDurationMs(task, referenceAgentMs || actualAgentMs);
+
+  return normalizeTaskTimeMetrics({
+    actualAgentMs,
+    estimatedHumanMs,
+    estimatedSavedMs: estimatedHumanMs - actualAgentMs,
+    totalRunCount: runs.length,
+    successfulRunCount: successfulRuns.length,
+    failedRunCount: failedRuns.length,
+    lastRunDurationMs: Math.max(0, Number(lastRun?.durationMs || 0) || 0),
+    lastSuccessfulRunDurationMs: Math.max(0, Number(lastSuccessfulRun?.durationMs || 0) || 0),
+    estimateVersion: TASK_TIME_ESTIMATE_VERSION,
+    lastUpdatedAt: lastRun?.finishedAt || lastRun?.updatedAt || null,
+  });
+}
+
+function getTaskStoredOrDerivedTimeMetrics(task) {
+  const stored = normalizeTaskTimeMetrics(task?.timeMetrics);
+  if (stored.totalRunCount > 0 || stored.actualAgentMs > 0 || stored.lastRunDurationMs > 0) {
+    return stored;
+  }
+  return deriveTaskTimeMetricsFromHistory(task);
 }
 
 function resolveTaskSkillFromRepoRole(role, fallbackSkill = 'product') {

@@ -105,6 +105,7 @@ const taskBoardShell = document.getElementById('task-board-shell');
 const taskBoardEmpty = document.getElementById('task-board-empty');
 const taskBoardTitle = document.getElementById('task-board-title');
 const taskBoardDescription = document.getElementById('task-board-description');
+const taskBoardProjectStats = document.getElementById('task-board-project-stats');
 const taskBoardContextPill = document.getElementById('task-board-context-pill');
 const projectFormModePill = document.getElementById('project-form-mode-pill');
 const projectForm = document.getElementById('project-form');
@@ -115,6 +116,7 @@ const projectServiceList = document.getElementById('project-service-list');
 const addProjectServiceButton = document.getElementById('add-project-service-button');
 const projectNotesInput = document.getElementById('project-notes');
 const projectGitWorkflowSelect = document.getElementById('project-git-workflow');
+const projectKeepDocsUpToDateInput = document.getElementById('project-keep-docs-up-to-date');
 const projectSubmitButton = document.getElementById('project-submit-button');
 const projectCancelButton = document.getElementById('project-cancel-button');
 const taskOwnerField = document.getElementById('task-owner-field');
@@ -142,6 +144,8 @@ const taskEditSubmitButton = taskEditForm.querySelector('button[type="submit"]')
 const taskCommentSubmitButton = taskCommentForm.querySelector('button[type="submit"]');
 const taskCommentAuthor = document.getElementById('task-comment-author');
 const taskCommentBody = document.getElementById('task-comment-body');
+const taskDetailTimeMetrics = document.getElementById('task-detail-time-metrics');
+const taskDetailTimeSavingsPill = document.getElementById('task-detail-time-savings-pill');
 const taskDetailRunStatus = document.getElementById('task-detail-run-status');
 const taskDetailOutput = document.getElementById('task-detail-output');
 const taskDetailError = document.getElementById('task-detail-error');
@@ -369,6 +373,14 @@ function getProjectRepoUrl(project) {
 
 function getProjectReviewServices(project) {
   return typeof project === 'string' ? [] : Array.isArray(project?.reviewServices) ? project.reviewServices.filter(Boolean) : [];
+}
+
+function getProjectStats(project) {
+  return typeof project === 'string' ? null : project?.stats || null;
+}
+
+function getProjectKeepDocsUpToDate(project) {
+  return typeof project === 'string' ? false : Boolean(project?.keepDocumentationUpToDate);
 }
 
 function getProjectByName(name) {
@@ -621,12 +633,61 @@ function formatDateTime(timestamp) {
 }
 
 function formatDuration(durationMs) {
-  if (!durationMs) return 'n/a';
-  const seconds = Math.round(durationMs / 1000);
+  if (durationMs === null || durationMs === undefined || Number.isNaN(Number(durationMs))) return 'n/a';
+  const seconds = Math.max(0, Math.round(Number(durationMs) / 1000));
+  if (!seconds) return '0m';
   if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
   const remainder = seconds % 60;
+  if (hours) {
+    if (!minutes) return `${hours}h`;
+    return `${hours}h ${minutes}m`;
+  }
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function formatSignedDuration(durationMs) {
+  if (!durationMs) return '0m';
+  const sign = durationMs < 0 ? '-' : '';
+  return `${sign}${formatDuration(Math.abs(durationMs))}`;
+}
+
+function getTaskTimeSummary(task) {
+  return task?.timeSummary || null;
+}
+
+function buildTaskTimeMetaLine(task) {
+  const summary = getTaskTimeSummary(task);
+  if (!summary) return '';
+  return `Agent ${formatDuration(summary.actualAgentMs)} · Human est. ${formatDuration(summary.estimatedHumanMs)}`;
+}
+
+function buildProjectStatsCards(project) {
+  const stats = getProjectStats(project);
+  if (!stats) {
+    return '<div class="empty-state">No project stats yet.</div>';
+  }
+
+  const cards = [
+    { label: 'Completed', value: stats.completedTaskCount, detail: `${stats.taskCount} total task${stats.taskCount === 1 ? '' : 's'}` },
+    { label: 'Agent time', value: formatDuration(stats.agentTimeMs), detail: `${stats.totalRunCount} total run${stats.totalRunCount === 1 ? '' : 's'}` },
+    { label: 'Human estimate', value: formatDuration(stats.humanTimeMs), detail: `${stats.trackedCompletedTaskCount} completed task${stats.trackedCompletedTaskCount === 1 ? '' : 's'} with timing` },
+    { label: 'Time saved', value: formatSignedDuration(stats.timeSavedMs), detail: stats.automationMultiplier ? `${stats.automationMultiplier.toFixed(1)}x faster` : 'Waiting for completed work' },
+    { label: 'In flight', value: stats.activeTaskCount, detail: `${stats.blockedTaskCount} blocked` },
+  ];
+
+  return cards
+    .map(
+      (card) => `
+        <article class="project-stat-card">
+          <p class="project-stat-label">${escapeHtml(card.label)}</p>
+          <div class="project-stat-value">${escapeHtml(String(card.value))}</div>
+          <p class="project-stat-detail">${escapeHtml(card.detail)}</p>
+        </article>
+      `
+    )
+    .join('');
 }
 
 function getStatusClass(status) {
@@ -1053,6 +1114,7 @@ function renderKanban() {
       const node = cardTemplate.content.firstElementChild.cloneNode(true);
       const agent = findAgent(task.assignedAgentId);
       const notesNode = node.querySelector('.task-notes');
+      const timeMetaNode = node.querySelector('.task-time-meta');
 
       node.dataset.taskId = task.id;
       node.dataset.lane = lane.id;
@@ -1080,6 +1142,14 @@ function renderKanban() {
       node.querySelector('.assignee-tag').textContent = agent
         ? `${agent.emoji} ${agent.name}${task.runStatus === 'running' ? ' running' : ''}`
         : 'Unassigned';
+      const timeMetaLine = buildTaskTimeMetaLine(task);
+      if (timeMetaLine) {
+        timeMetaNode.hidden = false;
+        timeMetaNode.textContent = timeMetaLine;
+      } else {
+        timeMetaNode.hidden = true;
+        timeMetaNode.textContent = '';
+      }
       node.querySelector('.task-actions').innerHTML = buildTaskActions(task, { compact: true });
       if (task.liveStatus?.message) {
         notesNode.textContent = `${task.liveStatus.message} Started ${relativeTime(task.liveStatus.startedAt)}.`;
@@ -1573,14 +1643,19 @@ function renderTaskBoardContext() {
     taskBoardEmpty.hidden = false;
     if (taskBoardTitle) taskBoardTitle.textContent = 'Define work before agents touch it';
     if (taskBoardDescription) taskBoardDescription.textContent = 'Open a project board above to create project-scoped tasks.';
+    if (taskBoardProjectStats) taskBoardProjectStats.innerHTML = '';
     if (taskBoardContextPill) taskBoardContextPill.textContent = 'Select a project';
     return;
   }
 
+  const stats = getProjectStats(project);
   taskBoardShell.hidden = false;
   taskBoardEmpty.hidden = true;
   if (taskBoardTitle) taskBoardTitle.textContent = `${project.name} task intake`;
   if (taskBoardDescription) taskBoardDescription.textContent = `${getProjectWorkflowLabel(project)} · ${getTasksForProject(project).length} task${getTasksForProject(project).length === 1 ? '' : 's'} currently on this board. Drag cards within a lane to set execution order.`;
+  if (taskBoardProjectStats) {
+    taskBoardProjectStats.innerHTML = buildProjectStatsCards(project);
+  }
   if (taskBoardContextPill) taskBoardContextPill.textContent = `Project: ${project.name}`;
 }
 
@@ -1596,6 +1671,9 @@ function clearProjectForm() {
   projectForm.reset();
   renderProjectRepoFields([createEmptyProjectRepo()]);
   renderProjectServiceFields([]);
+  if (projectKeepDocsUpToDateInput) {
+    projectKeepDocsUpToDateInput.checked = false;
+  }
   syncProjectFormMode();
 }
 
@@ -1608,6 +1686,9 @@ function openProjectEdit(projectId) {
   renderProjectRepoFields(getProjectRepos(project));
   renderProjectServiceFields(getProjectReviewServices(project));
   projectGitWorkflowSelect.value = getProjectGitWorkflow(project);
+  if (projectKeepDocsUpToDateInput) {
+    projectKeepDocsUpToDateInput.checked = getProjectKeepDocsUpToDate(project);
+  }
   projectNotesInput.value = project.notes || '';
   syncProjectFormMode();
   renderProjects();
@@ -1630,6 +1711,7 @@ function renderProjects() {
           const primaryRepo = getProjectPrimaryRepo(project);
           const repoCount = getProjectRepos(project).length;
           const reviewServiceCount = getProjectReviewServices(project).length;
+          const stats = getProjectStats(project);
           return `
             <article class="project-card">
               <div class="project-card-header">
@@ -1644,7 +1726,13 @@ function renderProjects() {
                 <span class="tag">${escapeHtml(getProjectWorkflowLabel(project))}</span>
                 <span class="tag">${repoCount} repo${repoCount === 1 ? '' : 's'}</span>
                 <span class="tag">${reviewServiceCount} review service${reviewServiceCount === 1 ? '' : 's'}</span>
+                ${getProjectKeepDocsUpToDate(project) ? '<span class="tag">Docs auto-update on</span>' : ''}
               </div>
+              ${stats ? `
+                <div class="project-stats-grid compact-project-stats">
+                  ${buildProjectStatsCards(project)}
+                </div>
+              ` : ''}
               <div class="task-actions">
                 <button type="button" class="button primary" data-project-action="open-board" data-project-id="${project.id}">Open board</button>
                 <button type="button" class="button ghost" data-project-action="edit" data-project-id="${project.id}">Edit</button>
@@ -1747,6 +1835,7 @@ function renderTaskDetail() {
   const preferredAgent = findAgent(task.preferredAgentId);
   const cleanError = cleanRuntimeNote(task.lastRun?.error);
   const outputPreview = task.lastRun?.output ? truncate(task.lastRun.output, 600) : '';
+  const timeSummary = getTaskTimeSummary(task);
   const reviewEnvironment = task.reviewEnvironment || null;
   const reviewServiceSummary = reviewEnvironment?.services?.length
     ? reviewEnvironment.services
@@ -1777,6 +1866,31 @@ function renderTaskDetail() {
   taskDetailTitle.textContent = task.title;
   taskDetailTags.innerHTML = detailTags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join('');
   taskDetailNotes.textContent = task.notes || 'No definition notes provided for this task.';
+  if (timeSummary) {
+    taskDetailTimeSavingsPill.textContent = `Saved ${formatSignedDuration(timeSummary.estimatedSavedMs)}`;
+    taskDetailTimeSavingsPill.className = `pill ${timeSummary.estimatedSavedMs < 0 ? 'warning' : 'success'}`;
+    taskDetailTimeMetrics.innerHTML = `
+      <article class="project-stat-card">
+        <p class="project-stat-label">Agent time</p>
+        <div class="project-stat-value">${escapeHtml(formatDuration(timeSummary.actualAgentMs))}</div>
+        <p class="project-stat-detail">Across ${timeSummary.totalRunCount} run${timeSummary.totalRunCount === 1 ? '' : 's'}</p>
+      </article>
+      <article class="project-stat-card">
+        <p class="project-stat-label">Human estimate</p>
+        <div class="project-stat-value">${escapeHtml(formatDuration(timeSummary.estimatedHumanMs))}</div>
+        <p class="project-stat-detail">Heuristic ${escapeHtml(timeSummary.estimateVersion || 'estimate')}</p>
+      </article>
+      <article class="project-stat-card">
+        <p class="project-stat-label">Estimated time saved</p>
+        <div class="project-stat-value">${escapeHtml(formatSignedDuration(timeSummary.estimatedSavedMs))}</div>
+        <p class="project-stat-detail">${timeSummary.automationMultiplier ? `${timeSummary.automationMultiplier.toFixed(1)}x faster than human estimate` : 'More data needed'}</p>
+      </article>
+    `;
+  } else {
+    taskDetailTimeSavingsPill.textContent = 'No estimate';
+    taskDetailTimeSavingsPill.className = 'pill neutral';
+    taskDetailTimeMetrics.innerHTML = '<div class="empty-state">Time metrics will appear after the first real agent run finishes.</div>';
+  }
   taskDetailSummary.hidden = isTaskEditMode;
   taskDetailEditSection.hidden = !isTaskEditMode;
   taskDetailEditToggle.textContent = isTaskEditMode ? 'Cancel edit' : 'Edit';
@@ -2108,6 +2222,7 @@ projectForm.addEventListener('submit', (event) => {
     repos,
     reviewServices: readProjectServiceFields(),
     gitWorkflow: formData.get('gitWorkflow'),
+    keepDocumentationUpToDate: formData.get('keepDocumentationUpToDate') === 'on',
     notes: formData.get('notes'),
   };
 

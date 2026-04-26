@@ -186,6 +186,11 @@ body[data-theme="dark"] .task-card {
   border-color: rgba(232, 210, 239, 0.1);
 }
 
+body[data-theme="dark"] .project-stat-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(232, 210, 239, 0.08);
+}
+
 body[data-theme="dark"] .task-run-note,
 body[data-theme="dark"] .sidebar-card p,
 body[data-theme="dark"] .approval-item p,
@@ -923,6 +928,16 @@ textarea:focus {
   color: var(--text-soft);
 }
 
+.task-time-meta {
+  margin-top: -4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.task-time-meta[hidden] {
+  display: none !important;
+}
+
 .task-card-header,
 .task-meta {
   align-items: center;
@@ -1059,6 +1074,57 @@ textarea:focus {
 
 .project-card .task-meta {
   justify-content: flex-start;
+}
+
+.project-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.project-stat-card {
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(244, 233, 248, 0.64);
+  border: 1px solid rgba(89, 48, 104, 0.08);
+}
+
+.project-stat-label {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.project-stat-value {
+  margin-top: 6px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.project-stat-detail {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.compact-project-stats .project-stat-card {
+  padding: 10px;
+}
+
+.compact-project-stats .project-stat-value {
+  font-size: 0.95rem;
+}
+
+.task-detail-time-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
 }
 
 .column-footer {
