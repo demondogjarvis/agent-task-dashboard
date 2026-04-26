@@ -50,6 +50,7 @@ let selectedTaskId = null;
 let taskDetailDraftTaskId = null;
 let isTaskEditMode = false;
 let selectedProjectId = null;
+let selectedTaskBoardProjectId = null;
 
 const statsGrid = document.getElementById('stats-grid');
 const approvalList = document.getElementById('approval-list');
@@ -95,6 +96,14 @@ const pageDescription = document.getElementById('page-description');
 const projectList = document.getElementById('project-list');
 const projectSummary = document.getElementById('project-summary');
 const projectCountPill = document.getElementById('project-count-pill');
+const taskBoardList = document.getElementById('task-board-list');
+const taskBoardSummary = document.getElementById('task-board-summary');
+const taskBoardCountPill = document.getElementById('task-board-count-pill');
+const taskBoardShell = document.getElementById('task-board-shell');
+const taskBoardEmpty = document.getElementById('task-board-empty');
+const taskBoardTitle = document.getElementById('task-board-title');
+const taskBoardDescription = document.getElementById('task-board-description');
+const taskBoardContextPill = document.getElementById('task-board-context-pill');
 const projectFormModePill = document.getElementById('project-form-mode-pill');
 const projectForm = document.getElementById('project-form');
 const projectNameInput = document.getElementById('project-name');
@@ -103,6 +112,7 @@ const projectNotesInput = document.getElementById('project-notes');
 const projectGitWorkflowSelect = document.getElementById('project-git-workflow');
 const projectSubmitButton = document.getElementById('project-submit-button');
 const projectCancelButton = document.getElementById('project-cancel-button');
+const taskOwnerField = document.getElementById('task-owner-field');
 const taskDetailDrawer = document.getElementById('task-detail-drawer');
 const taskDetailBackdrop = document.getElementById('task-detail-backdrop');
 const taskDetailCloseButton = document.getElementById('task-detail-close');
@@ -201,17 +211,41 @@ function toggleTheme() {
   applyTheme(themeToggleButton?.checked ? 'dark' : 'light');
 }
 
+function parseHashRoute() {
+  const hash = window.location.hash.replace(/^#/, '').trim();
+  if (!hash) {
+    return { view: 'overview', projectId: null };
+  }
+
+  const [rawView, rawProjectId] = hash.split('/');
+  const view = viewMeta[rawView] ? rawView : 'overview';
+  return {
+    view,
+    projectId: view === 'tasks' ? rawProjectId || null : null,
+  };
+}
+
 function getCurrentView() {
-  const view = window.location.hash.replace('#', '') || 'overview';
-  return viewMeta[view] ? view : 'overview';
+  return parseHashRoute().view;
+}
+
+function getCurrentTaskBoardProject() {
+  const { view, projectId } = parseHashRoute();
+  if (view !== 'tasks' || !dashboard) {
+    return null;
+  }
+  return dashboard.projects.find((project) => project.id === projectId) || null;
 }
 
 function applyView() {
-  const view = getCurrentView();
+  const { view } = parseHashRoute();
   const meta = viewMeta[view];
+  const boardProject = getCurrentTaskBoardProject();
 
-  pageTitle.textContent = meta.title;
-  pageDescription.textContent = meta.description;
+  pageTitle.textContent = boardProject && view === 'tasks' ? `${boardProject.name} board` : meta.title;
+  pageDescription.textContent = boardProject && view === 'tasks'
+    ? `Project-scoped kanban and task intake for ${boardProject.name}.`
+    : meta.description;
 
   document.querySelectorAll('.page-view').forEach((section) => {
     section.classList.toggle('active', section.dataset.view === view);
@@ -229,9 +263,10 @@ function applyView() {
 function populateFormOptions() {
   const agentSelect = document.getElementById('task-agent');
   const projectSelect = document.getElementById('task-owner');
+  const boardProject = getCurrentTaskBoardProject();
 
   const currentAgentValue = agentSelect.value;
-  const currentProjectValue = projectSelect.value;
+  const currentProjectValue = boardProject?.name || projectSelect.value;
 
   agentSelect.innerHTML = dashboard.agents
     .slice()
@@ -256,6 +291,11 @@ function populateFormOptions() {
   } else if (projects.length && !currentProjectValue) {
     projectSelect.value = getProjectName(projects[0]);
   }
+
+  projectSelect.disabled = Boolean(boardProject);
+  if (taskOwnerField) {
+    taskOwnerField.hidden = Boolean(boardProject);
+  }
 }
 
 function populateAgentSelectOptions(selectElement, selectedValue = '') {
@@ -278,6 +318,20 @@ function getProjectName(project) {
 
 function getProjectRepoUrl(project) {
   return typeof project === 'string' ? '' : project?.repoUrl || '';
+}
+
+function getTasksForProject(project) {
+  const projectName = typeof project === 'string' ? project : project?.name;
+  return dashboard.tasks.filter((task) => task.owner === projectName);
+}
+
+function getTaskBoardTasks() {
+  const project = getCurrentTaskBoardProject();
+  return project ? getTasksForProject(project) : [];
+}
+
+function getTaskBoardApprovals() {
+  return getTaskBoardTasks().filter((task) => task.lane === 'approval');
 }
 
 function getProjectGitWorkflow(project) {
@@ -380,8 +434,8 @@ function getTaskCompletionTime(task) {
   return task.completedAt || task.updatedAt || task.lastRun?.finishedAt || task.createdAt || 0;
 }
 
-function getDoneTasks() {
-  return dashboard.tasks
+function getDoneTasks(tasks = dashboard.tasks) {
+  return tasks
     .filter((task) => task.lane === 'done')
     .sort((a, b) => getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority]);
 }
@@ -666,21 +720,24 @@ function renderOverview() {
 
 function renderApprovals() {
   approvalList.innerHTML = '';
-  if (!dashboard.approvals.length) {
-    approvalList.innerHTML = '<div class="empty-state">Nothing is waiting for approval right now.</div>';
+  const approvals = getTaskBoardApprovals();
+  approvalCountPill.textContent = `${approvals.length} waiting`;
+  if (!approvals.length) {
+    approvalList.innerHTML = '<div class="empty-state">Nothing is waiting for approval on this project right now.</div>';
     return;
   }
 
-  approvalList.innerHTML = dashboard.approvals.map((task) => buildSummaryTaskCard(task, 'approval')).join('');
+  approvalList.innerHTML = approvals.map((task) => buildSummaryTaskCard(task, 'approval')).join('');
 }
 
 function renderKanban() {
   kanbanBoard.innerHTML = '';
-  const doneTasks = getDoneTasks();
+  const boardTasks = getTaskBoardTasks();
+  const doneTasks = getDoneTasks(boardTasks);
   const visibleDoneTasks = getVisibleDoneTasks(doneTasks);
 
   dashboard.lanes.forEach((lane) => {
-    const tasks = (lane.id === 'done' ? visibleDoneTasks : dashboard.tasks.filter((task) => task.lane === lane.id))
+    const tasks = (lane.id === 'done' ? visibleDoneTasks : boardTasks.filter((task) => task.lane === lane.id))
       .sort((a, b) => {
         if (lane.id === 'done') {
           return getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority];
@@ -1009,6 +1066,59 @@ function getProjectTaskCount(projectName) {
   return dashboard.tasks.filter((task) => task.owner === projectName).length;
 }
 
+function openTaskBoard(projectId) {
+  window.location.hash = `tasks/${projectId}`;
+}
+
+function renderTaskBoardPicker() {
+  const projects = getSortedProjects();
+  const currentProject = getCurrentTaskBoardProject();
+
+  taskBoardCountPill.textContent = `${projects.length} project${projects.length === 1 ? '' : 's'}`;
+  taskBoardSummary.textContent = projects.length
+    ? 'Choose a project board to work inside a single project-scoped kanban.'
+    : 'Create a project first, then open its kanban board here.';
+
+  taskBoardList.innerHTML = projects.length
+    ? projects
+        .map((project) => {
+          const projectTasks = getTasksForProject(project);
+          const approvalCount = projectTasks.filter((task) => task.lane === 'approval').length;
+          const readyCount = projectTasks.filter((task) => task.lane === 'ready').length;
+          const activeCount = projectTasks.filter((task) => ['inprogress', 'review'].includes(task.lane)).length;
+          const activeClass = currentProject?.id === project.id ? ' active' : '';
+          return `
+            <button type="button" class="project-board-chip${activeClass}" data-project-board-id="${project.id}">
+              <strong>${escapeHtml(project.name)}</strong>
+              <span>${projectTasks.length} task${projectTasks.length === 1 ? '' : 's'}</span>
+              <small>${approvalCount} waiting, ${readyCount} ready, ${activeCount} active</small>
+            </button>
+          `;
+        })
+        .join('')
+    : '<div class="empty-state">No projects yet. Add one in Projects first.</div>';
+}
+
+function renderTaskBoardContext() {
+  const project = getCurrentTaskBoardProject();
+  selectedTaskBoardProjectId = project?.id || null;
+
+  if (!project) {
+    taskBoardShell.hidden = true;
+    taskBoardEmpty.hidden = false;
+    if (taskBoardTitle) taskBoardTitle.textContent = 'Define work before agents touch it';
+    if (taskBoardDescription) taskBoardDescription.textContent = 'Open a project board above to create project-scoped tasks.';
+    if (taskBoardContextPill) taskBoardContextPill.textContent = 'Select a project';
+    return;
+  }
+
+  taskBoardShell.hidden = false;
+  taskBoardEmpty.hidden = true;
+  if (taskBoardTitle) taskBoardTitle.textContent = `${project.name} task intake`;
+  if (taskBoardDescription) taskBoardDescription.textContent = `${getProjectWorkflowLabel(project)} · ${getTasksForProject(project).length} task${getTasksForProject(project).length === 1 ? '' : 's'} currently on this board.`;
+  if (taskBoardContextPill) taskBoardContextPill.textContent = `Project: ${project.name}`;
+}
+
 function syncProjectFormMode() {
   const editing = Boolean(selectedProjectId);
   projectFormModePill.textContent = editing ? 'Edit' : 'Create';
@@ -1063,6 +1173,7 @@ function renderProjects() {
                 <span class="tag">${escapeHtml(getProjectWorkflowLabel(project))}</span>
               </div>
               <div class="task-actions">
+                <button type="button" class="button primary" data-project-action="open-board" data-project-id="${project.id}">Open board</button>
                 <button type="button" class="button ghost" data-project-action="edit" data-project-id="${project.id}">Edit</button>
                 <button type="button" class="button ghost danger" data-project-action="delete" data-project-id="${project.id}">Delete</button>
               </div>
@@ -1192,16 +1303,18 @@ function renderTaskDetail() {
 
 function renderAll() {
   renderStats();
+  renderTaskBoardPicker();
+  renderTaskBoardContext();
   populateFormOptions();
   renderOverview();
   renderApprovals();
   renderKanban();
+  renderProjects();
   renderAgents();
   renderUsage();
   renderActivity();
   renderSessions();
   renderBackgroundTasks();
-  renderProjects();
   renderRuns();
   renderHistory();
   renderSystemHistory();
@@ -1262,9 +1375,19 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  const boardButton = event.target.closest('button[data-project-board-id]');
+  if (boardButton) {
+    openTaskBoard(boardButton.dataset.projectBoardId);
+    return;
+  }
+
   const projectButton = event.target.closest('button[data-project-id]');
   if (projectButton) {
     const { projectAction, projectId } = projectButton.dataset;
+    if (projectAction === 'open-board') {
+      openTaskBoard(projectId);
+      return;
+    }
     if (projectAction === 'edit') {
       openProjectEdit(projectId);
       return;
@@ -1308,6 +1431,11 @@ document.addEventListener('click', (event) => {
 taskForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const formData = new FormData(taskForm);
+  const boardProject = getCurrentTaskBoardProject();
+  if (!boardProject) {
+    window.alert('Open a project board first, then create tasks inside that project.');
+    return;
+  }
   mutate(async () => {
     await api('/api/tasks', {
       method: 'POST',
@@ -1316,7 +1444,7 @@ taskForm.addEventListener('submit', (event) => {
         notes: formData.get('notes'),
         priority: formData.get('priority'),
         agentId: formData.get('agentId'),
-        owner: formData.get('owner'),
+        owner: boardProject.name,
       }),
     });
     taskForm.reset();
@@ -1407,6 +1535,12 @@ taskCommentForm.addEventListener('submit', (event) => {
 });
 
 seedReadyButton.addEventListener('click', () => {
+  const boardProject = getCurrentTaskBoardProject();
+  if (!boardProject) {
+    window.alert('Open a project board first, then create tasks inside that project.');
+    return;
+  }
+
   mutate(async () => {
     const created = await api('/api/tasks', {
       method: 'POST',
@@ -1415,7 +1549,7 @@ seedReadyButton.addEventListener('click', () => {
         notes: 'Create a compact summary card for live tasks, token burn, and idle capacity.',
         priority: 'high',
         agentId: 'atlas',
-        owner: 'Internal Tools',
+        owner: boardProject.name,
       }),
     });
     await api(`/api/tasks/${created.task.id}/move`, { method: 'POST', body: JSON.stringify({ direction: 1 }) });
@@ -1489,9 +1623,15 @@ reassignConfirmButton.addEventListener('click', () => {
 });
 
 newTaskButton.addEventListener('click', () => {
-  window.location.hash = 'tasks';
+  if (selectedTaskBoardProjectId) {
+    window.location.hash = `tasks/${selectedTaskBoardProjectId}`;
+  } else {
+    window.location.hash = 'tasks';
+  }
   applyView();
-  document.getElementById('task-title').focus();
+  if (getCurrentTaskBoardProject()) {
+    document.getElementById('task-title').focus();
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 

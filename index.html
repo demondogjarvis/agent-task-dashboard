@@ -108,75 +108,95 @@
         </section>
 
         <section class="page-view" data-view="tasks">
-          <div class="control-grid">
-            <article class="panel composer-panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Task intake</p>
-                  <h3>Define work before agents touch it</h3>
-                </div>
-                <span class="pill neutral">Approval gate enforced</span>
-              </div>
-              <form id="task-form" class="task-form">
-                <label>
-                  Task title
-                  <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
-                </label>
-                <label>
-                  Priority
-                  <select id="task-priority" name="priority">
-                    <option value="critical">Critical</option>
-                    <option value="high">High</option>
-                    <option value="medium" selected>Medium</option>
-                    <option value="low">Low</option>
-                  </select>
-                </label>
-                <label>
-                  Preferred agent
-                  <select id="task-agent" name="agentId"></select>
-                </label>
-                <label>
-                  Project
-                  <select id="task-owner" name="owner"></select>
-                </label>
-                <label class="wide">
-                  Definition notes
-                  <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
-                </label>
-                <div class="form-actions wide">
-                  <button type="submit" class="button primary">Create task</button>
-                  <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
-                </div>
-              </form>
-            </article>
-
-            <article class="panel approvals-panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Approvals</p>
-                  <h3>Queue that agents cannot bypass</h3>
-                </div>
-                <span class="pill warning" id="approval-count-pill">0 waiting</span>
-              </div>
-              <div id="approval-list" class="approval-list"></div>
-            </article>
-          </div>
-
-          <section class="kanban-wrapper panel">
+          <article class="panel project-board-panel">
             <div class="panel-header">
               <div>
-                <p class="eyebrow">Execution lanes</p>
-                <h3>Kanban for staged agent work</h3>
+                <p class="eyebrow">Project boards</p>
+                <h3>Open a project-specific kanban</h3>
               </div>
-              <div class="legend">
-                <span><i class="dot critical"></i>Critical</span>
-                <span><i class="dot high"></i>High</span>
-                <span><i class="dot medium"></i>Medium</span>
-                <span><i class="dot low"></i>Low</span>
-              </div>
+              <span class="pill neutral" id="task-board-count-pill">0 projects</span>
             </div>
-            <div id="kanban-board" class="kanban-board"></div>
-          </section>
+            <p id="task-board-summary" class="subtitle"></p>
+            <div id="task-board-list" class="project-board-list"></div>
+          </article>
+
+          <div id="task-board-shell" hidden>
+            <div class="control-grid">
+              <article class="panel composer-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">Task intake</p>
+                    <h3 id="task-board-title">Define work before agents touch it</h3>
+                    <p id="task-board-description" class="subtitle"></p>
+                  </div>
+                  <span class="pill neutral" id="task-board-context-pill">Approval gate enforced</span>
+                </div>
+                <form id="task-form" class="task-form">
+                  <label>
+                    Task title
+                    <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
+                  </label>
+                  <label>
+                    Priority
+                    <select id="task-priority" name="priority">
+                      <option value="critical">Critical</option>
+                      <option value="high">High</option>
+                      <option value="medium" selected>Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preferred agent
+                    <select id="task-agent" name="agentId"></select>
+                  </label>
+                  <label id="task-owner-field">
+                    Project
+                    <select id="task-owner" name="owner"></select>
+                  </label>
+                  <label class="wide">
+                    Definition notes
+                    <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
+                  </label>
+                  <div class="form-actions wide">
+                    <button type="submit" class="button primary">Create task</button>
+                    <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
+                  </div>
+                </form>
+              </article>
+
+              <article class="panel approvals-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">Approvals</p>
+                    <h3>Queue that agents cannot bypass</h3>
+                  </div>
+                  <span class="pill warning" id="approval-count-pill">0 waiting</span>
+                </div>
+                <div id="approval-list" class="approval-list"></div>
+              </article>
+            </div>
+
+            <section class="kanban-wrapper panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Execution lanes</p>
+                  <h3>Kanban for staged agent work</h3>
+                </div>
+                <div class="legend">
+                  <span><i class="dot critical"></i>Critical</span>
+                  <span><i class="dot high"></i>High</span>
+                  <span><i class="dot medium"></i>Medium</span>
+                  <span><i class="dot low"></i>Low</span>
+                </div>
+              </div>
+              <div id="kanban-board" class="kanban-board"></div>
+            </section>
+          </div>
+
+          <article id="task-board-empty" class="panel empty-state-panel">
+            <h3>Select a project to open its board</h3>
+            <p>Each project gets its own kanban and task intake flow, so new tasks inherit the project automatically.</p>
+          </article>
         </section>
         <section class="page-view" data-view="projects">
           <div class="projects-grid">

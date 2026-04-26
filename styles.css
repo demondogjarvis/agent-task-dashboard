@@ -424,7 +424,8 @@ p {
 .legend,
 .approval-actions,
 .agent-meta,
-.usage-meta {
+.usage-meta,
+.project-board-list {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -757,6 +758,58 @@ textarea:focus {
 
 .compact-task-card .task-title {
   font-size: 0.96rem;
+}
+
+.project-board-panel {
+  margin-bottom: 18px;
+}
+
+.project-board-list {
+  margin-top: 16px;
+}
+
+.project-board-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 220px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(89, 48, 104, 0.12);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--text);
+  cursor: pointer;
+  transition: 160ms ease;
+}
+
+.project-board-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(89, 48, 104, 0.24);
+  box-shadow: 0 12px 24px rgba(89, 48, 104, 0.08);
+}
+
+.project-board-chip.active {
+  border-color: rgba(89, 48, 104, 0.34);
+  background: rgba(244, 233, 248, 0.96);
+}
+
+.project-board-chip strong {
+  font-size: 0.95rem;
+}
+
+.project-board-chip span,
+.project-board-chip small {
+  color: var(--muted);
+}
+
+.empty-state-panel {
+  text-align: center;
+}
+
+.empty-state-panel p {
+  max-width: 60ch;
+  margin: 8px auto 0;
 }
 
 .live-task-note {
