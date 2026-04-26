@@ -805,6 +805,14 @@ textarea:focus {
   gap: 12px;
 }
 
+.task-stack.reorderable-stack {
+  min-height: 24px;
+}
+
+.task-stack.drag-over-stack {
+  border-radius: 18px;
+}
+
 .task-card {
   display: flex;
   flex-direction: column;
@@ -814,6 +822,22 @@ textarea:focus {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 233, 248, 0.96));
   border: 1px solid rgba(89, 48, 104, 0.1);
   box-shadow: 0 10px 24px rgba(89, 48, 104, 0.08);
+}
+
+.draggable-task-card {
+  cursor: grab;
+}
+
+.draggable-task-card:active {
+  cursor: grabbing;
+}
+
+.task-card.dragging {
+  opacity: 0.42;
+}
+
+.task-card.drop-target-before {
+  box-shadow: 0 -4px 0 0 var(--accent), 0 10px 24px rgba(89, 48, 104, 0.08);
 }
 
 .compact-task-card {
@@ -903,6 +927,21 @@ textarea:focus {
 .task-meta {
   align-items: center;
   flex-wrap: wrap;
+}
+
+.task-card-header {
+  justify-content: flex-start;
+}
+
+.task-owner {
+  margin-left: auto;
+}
+
+.task-drag-handle {
+  color: var(--muted);
+  font-size: 0.9rem;
+  letter-spacing: 1px;
+  user-select: none;
 }
 
 .task-detail-tags {

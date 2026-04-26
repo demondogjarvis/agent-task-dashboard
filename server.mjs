@@ -2861,6 +2861,7 @@ async function applySplitTaskPlan(task, inputPlan = null) {
       preferredAgentId: entry.preferredAgentId,
       owner: task.owner,
       lane: 'definition',
+      laneOrder: 0,
       assignedAgentId: null,
       runStatus: 'idle',
       createdAt: now + index,
@@ -2881,6 +2882,9 @@ async function applySplitTaskPlan(task, inputPlan = null) {
   });
 
   state.tasks.unshift(...createdTasks.slice().reverse());
+  createdTasks.slice().reverse().forEach((childTask) => {
+    placeTaskInLane(childTask, { owner: task.owner, lane: 'definition', position: 'top' });
+  });
   task.splitChildren = createdTasks.map((item) => item.id);
   task.comments = Array.isArray(task.comments) ? task.comments : [];
   task.comments.push({
