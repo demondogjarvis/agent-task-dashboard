@@ -127,6 +127,7 @@ const taskEditTitle = document.getElementById('task-edit-title');
 const taskEditPriority = document.getElementById('task-edit-priority');
 const taskEditAgent = document.getElementById('task-edit-agent');
 const taskEditOwner = document.getElementById('task-edit-owner');
+const taskEditOwnerField = document.getElementById('task-edit-owner-field');
 const taskEditNotes = document.getElementById('task-edit-notes');
 const taskCommentCount = document.getElementById('task-comment-count');
 const taskCommentList = document.getElementById('task-comment-list');
@@ -332,6 +333,17 @@ function getTaskBoardTasks() {
 
 function getTaskBoardApprovals() {
   return getTaskBoardTasks().filter((task) => task.lane === 'approval');
+}
+
+function isTaskVisibleInCurrentBoard(task) {
+  const boardProject = getCurrentTaskBoardProject();
+  if (getCurrentView() !== 'tasks') {
+    return true;
+  }
+  if (!boardProject) {
+    return false;
+  }
+  return task?.owner === boardProject.name;
 }
 
 function getProjectGitWorkflow(project) {
@@ -778,9 +790,13 @@ function renderKanban() {
       node.setAttribute('aria-label', `Open details for ${task.title}`);
       node.classList.add('compact-task-card');
 
+      const boardProject = getCurrentTaskBoardProject();
+      const ownerNode = node.querySelector('.task-owner');
+
       node.querySelector('.priority-dot').classList.add(priorityClass(task.priority));
       node.querySelector('.task-priority-label').textContent = task.priority;
-      node.querySelector('.task-owner').textContent = task.owner || 'No stream';
+      ownerNode.textContent = task.owner || 'No stream';
+      ownerNode.hidden = Boolean(boardProject);
       node.querySelector('.task-title').textContent = task.title;
       node.querySelector('.skill-tag').textContent = skillLabels[task.skill] || task.skill;
       node.querySelector('.assignee-tag').textContent = agent
@@ -1203,8 +1219,23 @@ function syncTaskDetailForms(task) {
     return;
   }
 
+  const boardProject = getCurrentTaskBoardProject();
+
   populateAgentSelectOptions(taskEditAgent, task.preferredAgentId || '');
-  populateProjectSelectOptions(taskEditOwner, task.owner || '', { allowFallback: true, includePlaceholder: true });
+  if (boardProject) {
+    taskEditOwner.innerHTML = `<option value="${escapeHtml(boardProject.name)}">${escapeHtml(boardProject.name)}</option>`;
+    taskEditOwner.value = boardProject.name;
+    taskEditOwner.disabled = true;
+    if (taskEditOwnerField) {
+      taskEditOwnerField.hidden = true;
+    }
+  } else {
+    populateProjectSelectOptions(taskEditOwner, task.owner || '', { allowFallback: true, includePlaceholder: true });
+    taskEditOwner.disabled = false;
+    if (taskEditOwnerField) {
+      taskEditOwnerField.hidden = false;
+    }
+  }
   taskEditTitle.value = task.title || '';
   taskEditPriority.value = task.priority || 'medium';
   taskEditNotes.value = task.notes || '';
@@ -1247,11 +1278,12 @@ function renderTaskDetail() {
   }
 
   const task = dashboard.tasks.find((item) => item.id === selectedTaskId);
-  if (!task) {
+  if (!task || !isTaskVisibleInCurrentBoard(task)) {
     closeTaskDetail();
     return;
   }
 
+  const boardProject = getCurrentTaskBoardProject();
   const comments = Array.isArray(task.comments) ? task.comments : [];
   const agent = findAgent(task.assignedAgentId);
   const preferredAgent = findAgent(task.preferredAgentId);
@@ -1260,7 +1292,7 @@ function renderTaskDetail() {
   const detailTags = [
     task.priority,
     skillLabels[task.skill] || task.skill,
-    task.owner || 'No stream',
+    boardProject ? null : task.owner || 'No stream',
     agent ? `${agent.emoji} ${agent.name}` : 'Unassigned',
     preferredAgent ? `Preferred: ${preferredAgent.name}` : null,
     `${comments.length} comment${comments.length === 1 ? '' : 's'}`,
@@ -1288,9 +1320,10 @@ function renderTaskDetail() {
   taskDetailError.textContent = cleanError ? `Runtime note: ${cleanError}` : '';
   taskDetailActions.innerHTML = buildTaskActions(task, { includeSecondary: true });
   taskEditSubmitButton.textContent = editLocked ? 'Locked while running' : 'Save changes';
-  [taskEditTitle, taskEditPriority, taskEditAgent, taskEditOwner, taskEditNotes, taskEditSubmitButton].forEach((element) => {
+  [taskEditTitle, taskEditPriority, taskEditAgent, taskEditNotes, taskEditSubmitButton].forEach((element) => {
     element.disabled = editLocked;
   });
+  taskEditOwner.disabled = editLocked || Boolean(boardProject);
 
   syncTaskDetailForms(task);
   renderTaskComments(task);
@@ -1502,6 +1535,7 @@ taskEditForm.addEventListener('submit', (event) => {
   if (!selectedTaskId) return;
 
   const formData = new FormData(taskEditForm);
+  const boardProject = getCurrentTaskBoardProject();
   mutate(async () => {
     await api(`/api/tasks/${selectedTaskId}/update`, {
       method: 'POST',
@@ -1510,7 +1544,7 @@ taskEditForm.addEventListener('submit', (event) => {
         notes: formData.get('notes'),
         priority: formData.get('priority'),
         agentId: formData.get('agentId'),
-        owner: formData.get('owner'),
+        owner: boardProject?.name || formData.get('owner'),
       }),
     });
     isTaskEditMode = false;
@@ -1635,7 +1669,13 @@ newTaskButton.addEventListener('click', () => {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
-window.addEventListener('hashchange', applyView);
+window.addEventListener('hashchange', () => {
+  if (dashboard) {
+    renderAll();
+  } else {
+    applyView();
+  }
+});
 
 initTheme();
 
