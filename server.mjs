@@ -701,6 +701,7 @@ async function handleApi(req, res, url) {
 
     const previousOwner = task.owner;
     const previousLane = task.lane;
+    const parentTaskId = task.parentTaskId || null;
     await stopTaskReviewEnvironment(task.id, { quiet: true });
     state.tasks = state.tasks.filter((item) => item.id !== task.id);
     state.tasks.forEach((item) => {
@@ -709,6 +710,9 @@ async function handleApi(req, res, url) {
     });
     if (REORDERABLE_LANES.has(previousLane)) {
       rebalanceLaneOrders(previousOwner, previousLane);
+    }
+    if (parentTaskId) {
+      await syncSplitParentTask(parentTaskId);
     }
     pushActivity(`${task.title} was deleted from the board.`, 'warning');
     await persistState();
@@ -759,11 +763,12 @@ async function moveTask(task, direction) {
     task.updatedAt = Date.now();
     rebalanceLaneOrders(previousOwner, previousLane);
     const documentationUpdate = await maybeQueueDocumentationUpdate(task);
+    const parentUpdate = task.parentTaskId ? await syncSplitParentTask(task.parentTaskId) : null;
     pushActivity(
       `${task.title} marked Done after review.${publish.message ? ` ${publish.message}` : ''}${documentationUpdate?.message ? ` ${documentationUpdate.message}` : ''}`,
       'info'
     );
-    return { ok: true, publish, documentationUpdate };
+    return { ok: true, publish, documentationUpdate, parentUpdate };
   }
 
   if (task.lane === 'review' && nextLane !== 'review') {
@@ -777,16 +782,18 @@ async function moveTask(task, direction) {
     task.runStatus = 'idle';
     task.completedAt = null;
     task.updatedAt = Date.now();
+    const parentUpdate = task.parentTaskId ? await syncSplitParentTask(task.parentTaskId) : null;
     pushActivity(`${task.title} moved back to Ready for Agents.`, 'warning');
-    return { ok: true };
+    return { ok: true, parentUpdate };
   }
 
   placeTaskInLane(task, { owner: task.owner, lane: nextLane, position: 'bottom' });
   rebalanceLaneOrders(previousOwner, previousLane);
   task.completedAt = null;
   task.updatedAt = Date.now();
+  const parentUpdate = task.parentTaskId ? await syncSplitParentTask(task.parentTaskId) : null;
   pushActivity(`${task.title} moved to ${laneTitle(nextLane)}.`, 'info');
-  return { ok: true };
+  return { ok: true, parentUpdate };
 }
 
 function resolveDocumentationFollowUpRepo(project) {
@@ -2927,6 +2934,76 @@ function getUnresolvedBlockerIds(task) {
 
 function isSplitParentTask(task) {
   return normalizeTaskDependencyIds(task?.splitChildren).length > 0;
+}
+
+function getSplitChildTasks(task) {
+  return normalizeTaskDependencyIds(task?.splitChildren)
+    .map((taskId) => findTaskById(taskId))
+    .filter(Boolean);
+}
+
+function getSplitParentProgress(task) {
+  const childTasks = getSplitChildTasks(task);
+  const totalCount = childTasks.length;
+  const completedCount = childTasks.filter((childTask) => childTask.lane === 'done').length;
+  return {
+    childTasks,
+    totalCount,
+    completedCount,
+    allDone: totalCount > 0 && completedCount === totalCount,
+  };
+}
+
+async function syncSplitParentTask(parentTaskId) {
+  const parentTask = findTaskById(parentTaskId);
+  if (!parentTask || !isSplitParentTask(parentTask)) {
+    return null;
+  }
+
+  const progress = getSplitParentProgress(parentTask);
+  if (!progress.totalCount) {
+    return { parentTask, progress, changed: false };
+  }
+
+  if (progress.allDone) {
+    if (parentTask.lane === 'done') {
+      return { parentTask, progress, changed: false };
+    }
+
+    const previousLane = parentTask.lane;
+    const previousOwner = parentTask.owner;
+    parentTask.lane = 'done';
+    parentTask.laneOrder = null;
+    parentTask.assignedAgentId = null;
+    parentTask.runStatus = 'idle';
+    parentTask.completedAt = Date.now();
+    parentTask.updatedAt = Date.now();
+
+    if (REORDERABLE_LANES.has(previousLane)) {
+      rebalanceLaneOrders(previousOwner, previousLane);
+    }
+
+    pushActivity(
+      `${parentTask.title} automatically moved to Done after all ${progress.totalCount} child task${progress.totalCount === 1 ? '' : 's'} were completed.`,
+      'info'
+    );
+    return { parentTask, progress, changed: true };
+  }
+
+  if (parentTask.lane === 'done') {
+    placeTaskInLane(parentTask, { owner: parentTask.owner, lane: 'definition', position: 'top' });
+    parentTask.assignedAgentId = null;
+    parentTask.runStatus = 'idle';
+    parentTask.completedAt = null;
+    parentTask.updatedAt = Date.now();
+    pushActivity(
+      `${parentTask.title} moved back to Definition because not all child tasks are completed anymore.`,
+      'warning'
+    );
+    return { parentTask, progress, changed: true };
+  }
+
+  return { parentTask, progress, changed: false };
 }
 
 function normalizeRepoRoleName(value) {

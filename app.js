@@ -471,6 +471,27 @@ function isSplitParentTask(task) {
   return Array.isArray(task?.splitChildren) && task.splitChildren.length > 0;
 }
 
+function getSplitChildTasks(task) {
+  return (Array.isArray(task?.splitChildren) ? task.splitChildren : [])
+    .map((taskId) => getTaskById(taskId))
+    .filter(Boolean);
+}
+
+function getSplitProgress(task) {
+  const childTasks = getSplitChildTasks(task);
+  const totalCount = childTasks.length;
+  const completedCount = childTasks.filter((childTask) => childTask.lane === 'done').length;
+  return { totalCount, completedCount };
+}
+
+function formatSplitProgress(task) {
+  const { totalCount, completedCount } = getSplitProgress(task);
+  if (!totalCount) {
+    return '';
+  }
+  return `${completedCount}/${totalCount} subtasks completed`;
+}
+
 function formatBlockingSummary(task) {
   const blockers = getBlockingTasks(task);
   if (!blockers.length) {
@@ -1260,7 +1281,7 @@ function renderKanban() {
         notesNode.textContent = formatBlockingSummary(task);
         notesNode.classList.add('live-task-note');
       } else if (isSplitParentTask(task)) {
-        notesNode.textContent = `Split into ${task.splitChildren.length} child task${task.splitChildren.length === 1 ? '' : 's'}. Use those for implementation.`;
+        notesNode.textContent = `${formatSplitProgress(task)}. Use child tasks for implementation.`;
         notesNode.classList.add('live-task-note');
       } else {
         notesNode.remove();
@@ -1319,6 +1340,11 @@ function renderKanban() {
         splitTag.className = 'tag';
         splitTag.textContent = 'Split parent';
         node.querySelector('.task-meta').appendChild(splitTag);
+
+        const splitProgressTag = document.createElement('span');
+        splitProgressTag.className = 'tag';
+        splitProgressTag.textContent = formatSplitProgress(task);
+        node.querySelector('.task-meta').appendChild(splitProgressTag);
       }
 
       node.addEventListener('click', (event) => {
@@ -1945,6 +1971,7 @@ function renderTaskDetail() {
     : '';
   const reviewFailure = reviewEnvironment?.services?.find((service) => service.error)?.error || '';
   const blockingSummary = formatBlockingSummary(task);
+  const splitProgress = formatSplitProgress(task);
   const detailTags = [
     task.priority,
     skillLabels[task.skill] || task.skill,
@@ -1954,7 +1981,8 @@ function renderTaskDetail() {
     preferredAgent ? `Preferred: ${preferredAgent.name}` : null,
     reviewEnvironment ? `Review env: ${reviewEnvironment.status}` : null,
     blockingSummary || null,
-    isSplitParentTask(task) ? `Split into ${task.splitChildren.length} child task${task.splitChildren.length === 1 ? '' : 's'}` : null,
+    isSplitParentTask(task) ? 'Split parent' : null,
+    splitProgress || null,
     `${comments.length} comment${comments.length === 1 ? '' : 's'}`,
     task.lane === 'done' ? `Completed ${relativeTime(getTaskCompletionTime(task))}` : `Updated ${relativeTime(task.updatedAt)}`,
   ].filter(Boolean);
