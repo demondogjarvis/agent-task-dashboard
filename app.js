@@ -712,6 +712,8 @@ function buildProjectStatsCards(project, options = {}) {
     return '<div class="empty-state">No project stats yet.</div>';
   }
 
+  const sameAsLifetime = (primaryValue, lifetimeValue) => lifetimeStats && Number(primaryValue || 0) === Number(lifetimeValue || 0);
+
   const cards = [
     {
       label: 'Completed',
@@ -719,7 +721,11 @@ function buildProjectStatsCards(project, options = {}) {
       detail: lifetimeStats
         ? `${primaryScopeLabel}: ${stats.completedTaskCount} completed visible now`
         : `Lifetime: ${stats.taskCount} total task${stats.taskCount === 1 ? '' : 's'}`,
-      secondary: lifetimeStats ? `Lifetime: ${lifetimeStats.completedTaskCount} completed` : null,
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.completedTaskCount, lifetimeStats.completedTaskCount)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${lifetimeStats.completedTaskCount} completed`
+        : null,
     },
     {
       label: 'Agent time',
@@ -727,7 +733,11 @@ function buildProjectStatsCards(project, options = {}) {
       detail: lifetimeStats
         ? `${primaryScopeLabel}: ${stats.totalRunCount} visible run${stats.totalRunCount === 1 ? '' : 's'}`
         : `Lifetime: ${stats.totalRunCount} total run${stats.totalRunCount === 1 ? '' : 's'}`,
-      secondary: lifetimeStats ? `Lifetime: ${formatDuration(lifetimeStats.agentTimeMs)}` : null,
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.agentTimeMs, lifetimeStats.agentTimeMs)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${formatDuration(lifetimeStats.agentTimeMs)}`
+        : null,
     },
     {
       label: 'Human estimate',
@@ -735,13 +745,21 @@ function buildProjectStatsCards(project, options = {}) {
       detail: lifetimeStats
         ? `${primaryScopeLabel}: ${stats.trackedTaskCount} visible task${stats.trackedTaskCount === 1 ? '' : 's'} with timing`
         : `Lifetime: ${stats.trackedCompletedTaskCount} completed task${stats.trackedCompletedTaskCount === 1 ? '' : 's'} with timing`,
-      secondary: lifetimeStats ? `Lifetime: ${formatDuration(lifetimeStats.humanTimeMs)}` : null,
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.humanTimeMs, lifetimeStats.humanTimeMs)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${formatDuration(lifetimeStats.humanTimeMs)}`
+        : null,
     },
     {
       label: 'Time saved',
       value: formatSignedDuration(stats.timeSavedMs),
       detail: stats.automationMultiplier ? `${stats.automationMultiplier.toFixed(1)}x faster` : 'Waiting for completed work',
-      secondary: lifetimeStats ? `Lifetime: ${formatSignedDuration(lifetimeStats.timeSavedMs)}` : null,
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.timeSavedMs, lifetimeStats.timeSavedMs)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${formatSignedDuration(lifetimeStats.timeSavedMs)}`
+        : null,
     },
     {
       label: 'In flight',
