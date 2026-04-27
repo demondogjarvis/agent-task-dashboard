@@ -953,8 +953,11 @@ function buildTaskActions(task, options = {}) {
       actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="start-review" data-task-id="${task.id}">${reviewLabel}</button>`);
     }
     actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
-  } else if (task.lane === 'definition' && !splitParent) {
-    actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="split-task" data-task-id="${task.id}">Split with Jarvis</button>`);
+  } else if (task.lane === 'definition') {
+    if (!splitParent) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="split-task" data-task-id="${task.id}">Split with Jarvis</button>`);
+    }
+    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}" ${splitParent ? 'disabled title="Move the child tasks forward instead."' : ''}>Send to Approval</button>`);
   } else if (!isRunning && !splitParent && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
     actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Next</button>`);
   }
