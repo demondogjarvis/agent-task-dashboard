@@ -663,18 +663,92 @@ function buildTaskTimeMetaLine(task) {
   return `Agent ${formatDuration(summary.actualAgentMs)} · Human est. ${formatDuration(summary.estimatedHumanMs)}`;
 }
 
-function buildProjectStatsCards(project) {
-  const stats = getProjectStats(project);
+function summarizeProjectTaskSet(tasks = []) {
+  const list = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+  const timedTasks = list
+    .map((task) => ({ task, summary: getTaskTimeSummary(task) }))
+    .filter((item) => item.summary);
+
+  const completedTaskCount = list.filter((task) => task.lane === 'done').length;
+  const activeTaskCount = list.filter((task) => ['inprogress', 'review'].includes(task.lane)).length;
+  const blockedTaskCount = list.filter((task) => task.lane !== 'done' && isTaskBlocked(task)).length;
+  const totalRunCount = timedTasks.reduce((sum, item) => sum + Number(item.summary.totalRunCount || 0), 0);
+  const agentTimeMs = timedTasks.reduce((sum, item) => sum + Number(item.summary.actualAgentMs || 0), 0);
+  const humanTimeMs = timedTasks.reduce((sum, item) => sum + Number(item.summary.estimatedHumanMs || 0), 0);
+  const timeSavedMs = timedTasks.reduce((sum, item) => sum + Number(item.summary.estimatedSavedMs || 0), 0);
+
+  return {
+    taskCount: list.length,
+    completedTaskCount,
+    trackedCompletedTaskCount: timedTasks.filter((item) => item.task.lane === 'done').length,
+    trackedTaskCount: timedTasks.length,
+    activeTaskCount,
+    blockedTaskCount,
+    totalRunCount,
+    agentTimeMs,
+    humanTimeMs,
+    timeSavedMs,
+    averageAgentTimeMs: timedTasks.length ? Math.round(agentTimeMs / timedTasks.length) : 0,
+    averageHumanTimeMs: timedTasks.length ? Math.round(humanTimeMs / timedTasks.length) : 0,
+    averageTimeSavedMs: timedTasks.length ? Math.round(timeSavedMs / timedTasks.length) : 0,
+    automationMultiplier: agentTimeMs > 0 ? humanTimeMs / agentTimeMs : null,
+  };
+}
+
+function getVisibleTaskBoardStats(project) {
+  const boardTasks = getTasksForProject(project);
+  const doneTasks = getDoneTasks(boardTasks);
+  const visibleDoneTasks = getVisibleDoneTasks(doneTasks);
+  const visibleDoneIds = new Set(visibleDoneTasks.map((task) => task.id));
+  const visibleTasks = boardTasks.filter((task) => task.lane !== 'done' || visibleDoneIds.has(task.id));
+  return summarizeProjectTaskSet(visibleTasks);
+}
+
+function buildProjectStatsCards(project, options = {}) {
+  const stats = options.primaryStats || getProjectStats(project);
+  const lifetimeStats = options.lifetimeStats || null;
+  const primaryScopeLabel = options.primaryScopeLabel || (lifetimeStats ? 'Current board' : 'Lifetime');
   if (!stats) {
     return '<div class="empty-state">No project stats yet.</div>';
   }
 
   const cards = [
-    { label: 'Completed', value: stats.completedTaskCount, detail: `${stats.taskCount} total task${stats.taskCount === 1 ? '' : 's'}` },
-    { label: 'Agent time', value: formatDuration(stats.agentTimeMs), detail: `${stats.totalRunCount} total run${stats.totalRunCount === 1 ? '' : 's'}` },
-    { label: 'Human estimate', value: formatDuration(stats.humanTimeMs), detail: `${stats.trackedCompletedTaskCount} completed task${stats.trackedCompletedTaskCount === 1 ? '' : 's'} with timing` },
-    { label: 'Time saved', value: formatSignedDuration(stats.timeSavedMs), detail: stats.automationMultiplier ? `${stats.automationMultiplier.toFixed(1)}x faster` : 'Waiting for completed work' },
-    { label: 'In flight', value: stats.activeTaskCount, detail: `${stats.blockedTaskCount} blocked` },
+    {
+      label: 'Completed',
+      value: stats.completedTaskCount,
+      detail: lifetimeStats
+        ? `${primaryScopeLabel}: ${stats.completedTaskCount} completed visible now`
+        : `Lifetime: ${stats.taskCount} total task${stats.taskCount === 1 ? '' : 's'}`,
+      secondary: lifetimeStats ? `Lifetime: ${lifetimeStats.completedTaskCount} completed` : null,
+    },
+    {
+      label: 'Agent time',
+      value: formatDuration(stats.agentTimeMs),
+      detail: lifetimeStats
+        ? `${primaryScopeLabel}: ${stats.totalRunCount} visible run${stats.totalRunCount === 1 ? '' : 's'}`
+        : `Lifetime: ${stats.totalRunCount} total run${stats.totalRunCount === 1 ? '' : 's'}`,
+      secondary: lifetimeStats ? `Lifetime: ${formatDuration(lifetimeStats.agentTimeMs)}` : null,
+    },
+    {
+      label: 'Human estimate',
+      value: formatDuration(stats.humanTimeMs),
+      detail: lifetimeStats
+        ? `${primaryScopeLabel}: ${stats.trackedTaskCount} visible task${stats.trackedTaskCount === 1 ? '' : 's'} with timing`
+        : `Lifetime: ${stats.trackedCompletedTaskCount} completed task${stats.trackedCompletedTaskCount === 1 ? '' : 's'} with timing`,
+      secondary: lifetimeStats ? `Lifetime: ${formatDuration(lifetimeStats.humanTimeMs)}` : null,
+    },
+    {
+      label: 'Time saved',
+      value: formatSignedDuration(stats.timeSavedMs),
+      detail: stats.automationMultiplier ? `${stats.automationMultiplier.toFixed(1)}x faster` : 'Waiting for completed work',
+      secondary: lifetimeStats ? `Lifetime: ${formatSignedDuration(lifetimeStats.timeSavedMs)}` : null,
+    },
+    {
+      label: 'In flight',
+      value: stats.activeTaskCount,
+      detail: `${stats.blockedTaskCount} blocked`,
+      secondary: lifetimeStats ? `Lifetime runs: ${lifetimeStats.totalRunCount}` : null,
+    },
   ];
 
   return cards
@@ -684,6 +758,7 @@ function buildProjectStatsCards(project) {
           <p class="project-stat-label">${escapeHtml(card.label)}</p>
           <div class="project-stat-value">${escapeHtml(String(card.value))}</div>
           <p class="project-stat-detail">${escapeHtml(card.detail)}</p>
+          ${card.secondary ? `<p class="project-stat-secondary">${escapeHtml(card.secondary)}</p>` : ''}
         </article>
       `
     )
@@ -1648,13 +1723,18 @@ function renderTaskBoardContext() {
     return;
   }
 
-  const stats = getProjectStats(project);
+  const visibleBoardStats = getVisibleTaskBoardStats(project);
+  const lifetimeStats = getProjectStats(project);
   taskBoardShell.hidden = false;
   taskBoardEmpty.hidden = true;
   if (taskBoardTitle) taskBoardTitle.textContent = `${project.name} task intake`;
   if (taskBoardDescription) taskBoardDescription.textContent = `${getProjectWorkflowLabel(project)} · ${getTasksForProject(project).length} task${getTasksForProject(project).length === 1 ? '' : 's'} currently on this board. Drag cards within a lane to set execution order.`;
   if (taskBoardProjectStats) {
-    taskBoardProjectStats.innerHTML = buildProjectStatsCards(project);
+    taskBoardProjectStats.innerHTML = buildProjectStatsCards(project, {
+      primaryStats: visibleBoardStats,
+      lifetimeStats,
+      primaryScopeLabel: 'Current board',
+    });
   }
   if (taskBoardContextPill) taskBoardContextPill.textContent = `Project: ${project.name}`;
 }

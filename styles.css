@@ -1113,6 +1113,13 @@ textarea:focus {
   line-height: 1.4;
 }
 
+.project-stat-secondary {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  line-height: 1.35;
+}
+
 .compact-project-stats .project-stat-card {
   padding: 10px;
 }
