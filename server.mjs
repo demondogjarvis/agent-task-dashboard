@@ -3008,7 +3008,7 @@ async function syncSplitParentTask(parentTaskId) {
 
 function normalizeRepoRoleName(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized || ['app', 'primary', 'repo'].includes(normalized)) return 'implementation';
+  if (!normalized || ['app', 'primary', 'repo', 'monorepo'].includes(normalized)) return 'implementation';
   if (['web', 'ui', 'client'].includes(normalized)) return 'frontend';
   if (['api', 'server', 'data'].includes(normalized)) return 'backend';
   if (['infra', 'platform', 'devops'].includes(normalized)) return 'service';
@@ -3044,10 +3044,59 @@ function buildSplitTaskNotes(parentTask, role, blockers = []) {
     .join('\n\n');
 }
 
+function roleLooksDocumentation(value) {
+  const haystack = String(value || '').trim().toLowerCase();
+  return DOCUMENTATION_REPO_HINTS.some((hint) => haystack.includes(hint));
+}
+
+function inferSplitRolesFromTask(task) {
+  const haystack = [task?.title, task?.notes]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join('\n');
+  const roles = new Set();
+
+  if (/(frontend|\bui\b|client|portal|page|pages|screen|screens|view|views|component|components|form|forms|layout|ux)\b/.test(haystack)) {
+    roles.add('frontend');
+  }
+  if (/(backend|\bapi\b|server|database|\bdb\b|schema|migration|persist|persistence|query|queries|endpoint|platform-api|auth|session)\b/.test(haystack)) {
+    roles.add('backend');
+  }
+  if (/(publish-worker|worker|queue|job|deploy|deployment|infra|infrastructure|runtime|observability|\bops\b|service|healthcheck)\b/.test(haystack)) {
+    roles.add('service');
+  }
+  if (/(\bqa\b|test|testing|playwright|vitest|smoke|regression)\b/.test(haystack)) {
+    roles.add('qa');
+  }
+
+  if (!roles.size) {
+    const fallbackRole = normalizeRepoRoleName(task?.repoRole || '');
+    if (['frontend', 'backend', 'service', 'qa'].includes(fallbackRole)) {
+      roles.add(fallbackRole);
+    }
+  }
+
+  if (!roles.size) {
+    const fallbackFromSkill = resolveTaskSkillFromRepoRole(task?.skill, 'implementation');
+    if (fallbackFromSkill === 'frontend') roles.add('frontend');
+    if (fallbackFromSkill === 'backend') roles.add('backend');
+    if (fallbackFromSkill === 'ops') roles.add('service');
+    if (fallbackFromSkill === 'qa') roles.add('qa');
+  }
+
+  return Array.from(roles);
+}
+
 function suggestSplitRolesForProject(project, task) {
+  const taskRole = normalizeRepoRoleName(task?.repoRole || '');
+  if (taskRole && roleLooksDocumentation(taskRole)) {
+    return [taskRole];
+  }
+
   const repos = getProjectRepos(project);
   const seen = new Set();
-  const roles = repos
+  let roles = repos
+    .filter((repo) => !isDocumentationRepo(repo))
     .map((repo) => normalizeRepoRoleName(repo.role || repo.label || ''))
     .filter((role) => {
       if (!role || seen.has(role)) return false;
@@ -3055,11 +3104,16 @@ function suggestSplitRolesForProject(project, task) {
       return true;
     });
 
-  if (!roles.length) {
-    roles.push(normalizeRepoRoleName(task?.repoRole || task?.skill || 'implementation'));
+  const inferredRoles = inferSplitRolesFromTask(task);
+  if (!roles.length || roles.every((role) => role === 'implementation')) {
+    roles = inferredRoles.length
+      ? inferredRoles
+      : [normalizeRepoRoleName(task?.repoRole || task?.skill || 'implementation')];
+  } else if (roles.includes('implementation') && inferredRoles.length) {
+    roles = roles.flatMap((role) => (role === 'implementation' ? inferredRoles : [role]));
   }
 
-  const ordered = roles.slice().sort((a, b) => {
+  const ordered = Array.from(new Set(roles)).sort((a, b) => {
     const rank = { service: 1, backend: 2, implementation: 3, frontend: 4, qa: 5 };
     return (rank[a] || 50) - (rank[b] || 50) || a.localeCompare(b);
   });
@@ -3104,6 +3158,10 @@ function createDefaultSplitPlan(task, project) {
   const roles = suggestSplitRolesForProject(project, task);
   if (!roles.length) {
     throw new Error('No implementation areas could be derived for this project yet.');
+  }
+
+  if (roles.length <= 1) {
+    throw new Error('No need to split this task. It already maps cleanly to one implementation area.');
   }
 
   const plan = [];
