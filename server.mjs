@@ -1827,6 +1827,37 @@ function appendReviewServiceLog(service, chunk, stream = 'stdout') {
   service.lastLogAt = Date.now();
 }
 
+function buildReviewOpenPreferenceHints(taskTitle = '') {
+  const haystack = String(taskTitle || '').trim().toLowerCase();
+  const hints = [];
+
+  if (haystack.includes('customer portal')) {
+    hints.push('customer portal', 'customer-portal');
+  }
+  if (haystack.includes('admin portal')) {
+    hints.push('admin portal', 'admin-portal');
+  }
+  if (haystack.includes('platform api') || /\bapi\b/.test(haystack) || /\bbackend\b/.test(haystack) || /\bservice\b/.test(haystack)) {
+    hints.push('platform api', 'platform-api', ' api ');
+  }
+
+  return hints;
+}
+
+function reviewServiceMatchesOpenHint(service, hint) {
+  const normalizedHint = String(hint || '').trim().toLowerCase();
+  if (!normalizedHint) {
+    return false;
+  }
+
+  const haystack = [service?.name, service?.repoRole, service?.cwd, service?.localUrl, service?.healthcheckUrl]
+    .map((value) => ` ${String(value || '').trim().toLowerCase()} `)
+    .filter(Boolean)
+    .join(' ');
+
+  return haystack.includes(` ${normalizedHint} `) || haystack.includes(normalizedHint);
+}
+
 function isPreferredReviewOpenService(service) {
   const haystack = [service?.name, service?.repoRole, service?.cwd]
     .map((value) => String(value || '').trim().toLowerCase())
@@ -1835,8 +1866,19 @@ function isPreferredReviewOpenService(service) {
   return ['frontend', 'portal', 'client', 'web', 'ui', 'site'].some((hint) => haystack.includes(hint));
 }
 
-function pickReviewSessionOpenUrl(services = []) {
+function pickReviewSessionOpenUrl(services = [], options = {}) {
   const readyServices = (Array.isArray(services) ? services : []).filter((service) => service?.localUrl && service.status === 'ready');
+  const preferredHints = Array.isArray(options?.preferredHints) && options.preferredHints.length
+    ? options.preferredHints
+    : buildReviewOpenPreferenceHints(options?.taskTitle || '');
+
+  for (const hint of preferredHints) {
+    const match = readyServices.find((service) => reviewServiceMatchesOpenHint(service, hint));
+    if (match?.localUrl) {
+      return match.localUrl;
+    }
+  }
+
   return readyServices.find((service) => isPreferredReviewOpenService(service))?.localUrl || readyServices[0]?.localUrl || null;
 }
 
@@ -1881,7 +1923,7 @@ function buildReviewSessionMessage(session) {
   const readyCount = services.filter((service) => service.status === 'ready').length;
   const failedService = services.find((service) => service.status === 'failed');
   const startupIssueService = services.find((service) => service.status === 'starting' && detectReviewServiceStartupIssue(service));
-  const openUrl = pickReviewSessionOpenUrl(services);
+  const openUrl = pickReviewSessionOpenUrl(services, { taskTitle: session.taskTitle });
 
   if (session.status === 'failed') {
     return failedService?.error
@@ -1910,7 +1952,7 @@ function summarizeReviewSession(session) {
   }
 
   const services = Array.isArray(session.services) ? session.services : [];
-  const openUrl = pickReviewSessionOpenUrl(services);
+  const openUrl = pickReviewSessionOpenUrl(services, { taskTitle: session.taskTitle });
   return {
     status: session.status,
     startedAt: session.startedAt,
