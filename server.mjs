@@ -466,7 +466,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|reorder|assign|reassign|update|comment|delete)$/);
+  const taskRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(approve|move|reorder|assign|reassign|update|comment|create-review-fix-task|delete)$/);
   if (!taskRoute) {
     sendJson(res, 404, { error: 'not_found' });
     return;
@@ -693,6 +693,16 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (action === 'create-review-fix-task') {
+    try {
+      const result = await createReviewRepairTask(task);
+      sendJson(res, 201, { ok: true, task: result.task, existing: result.existing, issue: result.issue?.issueSummary || '' });
+    } catch (error) {
+      sendJson(res, 400, { error: 'review_issue_task_failed', message: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+
   if (action === 'delete') {
     if (activeRuns.has(task.id) || task.runStatus === 'running') {
       sendJson(res, 400, { error: 'invalid_state', message: 'Running tasks cannot be deleted.' });
@@ -820,6 +830,148 @@ function buildDocumentationFollowUpNotes(task, project, repo) {
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+function summarizeReviewIssueForTitle(issueSummary) {
+  const normalized = String(issueSummary || '').trim();
+  if (!normalized) return 'review startup issue';
+  if (/typescript/i.test(normalized)) return 'TypeScript build errors';
+  if (/port is already in use|eaddrinuse/i.test(normalized)) return 'port conflict';
+  if (/dependencies are missing|package script startup failed|cannot find module|node_modules missing/i.test(normalized)) return 'dependency/startup issue';
+  if (/timed out waiting/i.test(normalized)) return 'review startup timeout';
+  return 'review startup issue';
+}
+
+function getRepairableReviewIssue(task) {
+  const session = reviewSessions.get(task.id);
+  if (!session) {
+    return null;
+  }
+
+  const services = Array.isArray(session.services) ? session.services : [];
+  const issueService = services.find((service) => service?.error)
+    || services.find((service) => detectReviewServiceStartupIssue(service))
+    || services.find((service) => service?.status === 'failed')
+    || null;
+
+  const issueSummary = issueService?.error
+    || detectReviewServiceStartupIssue(issueService)
+    || (session.status === 'failed' ? buildReviewSessionMessage(session) : '');
+
+  if (!issueSummary) {
+    return null;
+  }
+
+  return {
+    session,
+    service: issueService,
+    issueSummary,
+    serviceName: issueService?.name || 'Review service',
+    repoRole: issueService?.repoRole || task.repoRole || '',
+    repoUrl: issueService?.repoUrl || '',
+    branchName: issueService?.branchName || null,
+    localUrl: issueService?.localUrl || '',
+    healthcheckUrl: issueService?.healthcheckUrl || '',
+    logLines: Array.isArray(issueService?.logLines) ? issueService.logLines.slice(-10) : [],
+  };
+}
+
+function buildReviewRepairTaskTitle(task, issue) {
+  const label = summarizeReviewIssueForTitle(issue?.issueSummary || '');
+  const serviceName = String(issue?.serviceName || '').trim();
+  if (serviceName) {
+    return `Fix ${serviceName} ${label} blocking review for ${task.title}`;
+  }
+  return `Fix ${label} blocking review for ${task.title}`;
+}
+
+function buildReviewRepairTaskNotes(task, issue) {
+  return [
+    `Repair the review/startup issue that blocked testing for: ${task.title}`,
+    `Source task id: ${task.id}`,
+    `Project: ${task.owner}`,
+    issue?.serviceName ? `Affected review service: ${issue.serviceName}` : null,
+    issue?.branchName ? `Task branch: ${issue.branchName}` : null,
+    issue?.repoRole ? `Repo role: ${issue.repoRole}` : null,
+    issue?.repoUrl ? `Repo URL: ${issue.repoUrl}` : null,
+    issue?.localUrl ? `Expected local URL: ${issue.localUrl}` : null,
+    issue?.healthcheckUrl ? `Healthcheck URL: ${issue.healthcheckUrl}` : null,
+    '',
+    'Observed issue:',
+    issue?.issueSummary || 'Review service did not become ready.',
+    issue?.logLines?.length ? `Recent logs:\n${issue.logLines.join('\n')}` : null,
+    task.notes ? `Original task notes:\n${task.notes}` : null,
+    '',
+    'Expected result:',
+    '- Fix the startup/build problem so the review service can become ready from the task worktree.',
+    '- Keep the task branch/worktree review flow working locally before the source task moves to Done.',
+    '- Call out any follow-up cleanup needed if the root cause belongs in shared tooling or scripts.',
+  ]
+    .filter((value) => value !== null && value !== undefined)
+    .join('\n\n');
+}
+
+async function createReviewRepairTask(task) {
+  const issue = getRepairableReviewIssue(task);
+  if (!issue) {
+    throw new Error('No active review startup issue is available for task creation yet.');
+  }
+
+  const existing = state.tasks.find(
+    (candidate) => candidate.reviewIssueSourceTaskId === task.id && candidate.lane !== 'done'
+  );
+  if (existing) {
+    return { task: existing, existing: true, issue };
+  }
+
+  const repoRole = String(issue.repoRole || task.repoRole || '').trim();
+  const skill = resolveTaskSkillFromRepoRole(repoRole, task.skill);
+  const preferredAgentId = task.preferredAgentId || task.assignedAgentId || findPreferredAgentIdForSkill(skill) || null;
+  const repairTask = normalizeTaskRecord({
+    id: nextId('task'),
+    title: buildReviewRepairTaskTitle(task, issue),
+    notes: buildReviewRepairTaskNotes(task, issue),
+    priority: task.priority === 'critical' ? 'critical' : 'high',
+    skill,
+    preferredAgentId,
+    owner: task.owner,
+    lane: 'definition',
+    laneOrder: 0,
+    assignedAgentId: null,
+    runStatus: 'idle',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    lastRun: null,
+    comments: [
+      {
+        id: nextId('comment'),
+        author: 'Jarvis',
+        text: `Created from review issue on ${task.title}. ${issue.issueSummary}`,
+        createdAt: Date.now(),
+      },
+    ],
+    blockedBy: [],
+    splitChildren: [],
+    parentTaskId: null,
+    repoRole,
+    reviewIssueSourceTaskId: task.id,
+  });
+
+  state.tasks.unshift(repairTask);
+  placeTaskInLane(repairTask, { owner: repairTask.owner, lane: 'definition', position: 'top' });
+
+  task.comments = Array.isArray(task.comments) ? task.comments : [];
+  task.comments.push({
+    id: nextId('comment'),
+    author: 'Jarvis',
+    text: `Created repair task ${repairTask.id}: ${repairTask.title}`,
+    createdAt: Date.now(),
+  });
+  task.updatedAt = Date.now();
+
+  pushActivity(`Created repair task ${repairTask.id} from review issue on ${task.title}.`, 'warning');
+  await persistState();
+  return { task: repairTask, existing: false, issue };
 }
 
 async function maybeQueueDocumentationUpdate(task) {
@@ -1675,13 +1827,61 @@ function appendReviewServiceLog(service, chunk, stream = 'stdout') {
   service.lastLogAt = Date.now();
 }
 
+function isPreferredReviewOpenService(service) {
+  const haystack = [service?.name, service?.repoRole, service?.cwd]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  return ['frontend', 'portal', 'client', 'web', 'ui', 'site'].some((hint) => haystack.includes(hint));
+}
+
+function pickReviewSessionOpenUrl(services = []) {
+  const readyServices = (Array.isArray(services) ? services : []).filter((service) => service?.localUrl && service.status === 'ready');
+  return readyServices.find((service) => isPreferredReviewOpenService(service))?.localUrl || readyServices[0]?.localUrl || null;
+}
+
+function buildReviewServiceIdentity(service) {
+  if (!service) {
+    return '';
+  }
+
+  return String(
+    service.id
+    || `${service.name || 'service'}::${service.repoRole || ''}::${service.localUrl || ''}::${service.healthcheckUrl || ''}`
+  ).trim();
+}
+
+function detectReviewServiceStartupIssue(service) {
+  const lines = Array.isArray(service?.logLines) ? service.logLines.slice(-12) : [];
+  if (!lines.length) {
+    return '';
+  }
+
+  const recentLog = lines.join('\n');
+  if (/error TS\d+:/i.test(recentLog) || /has not been built from source file/i.test(recentLog)) {
+    return 'TypeScript build errors detected.';
+  }
+  if (/ERR_PNPM/i.test(recentLog) || /ELIFECYCLE/i.test(recentLog)) {
+    return 'Package script startup failed.';
+  }
+  if (/EADDRINUSE/i.test(recentLog)) {
+    return 'Port is already in use.';
+  }
+  if (/Cannot find module/i.test(recentLog) || /node_modules missing/i.test(recentLog)) {
+    return 'Dependencies are missing or incomplete.';
+  }
+
+  return '';
+}
+
 function buildReviewSessionMessage(session) {
   if (!session) return '';
   const services = Array.isArray(session.services) ? session.services : [];
   const total = services.length;
   const readyCount = services.filter((service) => service.status === 'ready').length;
   const failedService = services.find((service) => service.status === 'failed');
-  const openUrl = services.find((service) => service.localUrl && service.status === 'ready')?.localUrl || services.find((service) => service.localUrl)?.localUrl || null;
+  const startupIssueService = services.find((service) => service.status === 'starting' && detectReviewServiceStartupIssue(service));
+  const openUrl = pickReviewSessionOpenUrl(services);
 
   if (session.status === 'failed') {
     return failedService?.error
@@ -1697,6 +1897,10 @@ function buildReviewSessionMessage(session) {
     return `${readyCount}/${total} review service${total === 1 ? '' : 's'} ready${openUrl ? ` at ${openUrl}` : ''}.`;
   }
 
+  if (startupIssueService) {
+    return `${startupIssueService.name || 'Service'} is still starting. ${detectReviewServiceStartupIssue(startupIssueService)}`;
+  }
+
   return `${readyCount}/${total} review service${total === 1 ? '' : 's'} ready, starting the rest…`;
 }
 
@@ -1706,7 +1910,7 @@ function summarizeReviewSession(session) {
   }
 
   const services = Array.isArray(session.services) ? session.services : [];
-  const openUrl = services.find((service) => service.localUrl && service.status === 'ready')?.localUrl || services.find((service) => service.localUrl)?.localUrl || null;
+  const openUrl = pickReviewSessionOpenUrl(services);
   return {
     status: session.status,
     startedAt: session.startedAt,
@@ -1720,10 +1924,12 @@ function summarizeReviewSession(session) {
       repoRole: service.repoRole,
       repoUrl: service.repoUrl,
       cwd: service.cwd,
+      branchName: service.branchName || null,
       localUrl: service.localUrl,
       healthcheckUrl: service.healthcheckUrl,
       pid: service.pid,
       error: service.error || null,
+      startupIssue: detectReviewServiceStartupIssue(service) || null,
       logTail: Array.isArray(service.logLines) ? service.logLines.slice(-6) : [],
     })),
   };
@@ -1752,17 +1958,10 @@ async function resolveReviewServiceWorkspace(task, project, service) {
     throw new Error(`No repository is configured for review service ${service.name || 'unnamed service'}.`);
   }
 
-  const primaryRepo = getProjectPrimaryRepo(project);
-  const taskWorktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
-  let repoDir = null;
-
-  if (primaryRepo?.url && normalizeRepoUrl(primaryRepo.url) === normalizeRepoUrl(repo.url) && await pathExists(path.join(taskWorktreeDir, '.git'))) {
-    repoDir = taskWorktreeDir;
-  }
-
-  if (!repoDir) {
-    repoDir = (await ensureProjectRepoClone(project, repo)).repoDir;
-  }
+  const workspace = await ensureTaskRepoWorkspace(task, project, repo, {
+    workspaceKind: normalizeRepoUrl(repo.url) === normalizeRepoUrl(getProjectPrimaryRepo(project)?.url || '') ? 'task' : 'review',
+  });
+  const repoDir = workspace.workspaceDir;
 
   const requestedDir = String(service.workingDirectory || '').trim();
   const cwd = requestedDir ? path.resolve(repoDir, requestedDir) : repoDir;
@@ -1773,7 +1972,151 @@ async function resolveReviewServiceWorkspace(task, project, service) {
     throw new Error(`Working directory not found for ${service.name || 'unnamed service'}: ${cwd}`);
   }
 
-  return { repo, repoDir, cwd };
+  return { repo, repoDir, cwd, branchName: workspace.branchName };
+}
+
+async function detectReviewServiceInstallRoot(repoDir, cwd) {
+  const repoPackageJson = path.join(repoDir, 'package.json');
+  if (await pathExists(repoPackageJson)) {
+    return repoDir;
+  }
+
+  let currentDir = cwd;
+  while (currentDir.startsWith(repoDir)) {
+    if (await pathExists(path.join(currentDir, 'package.json'))) {
+      return currentDir;
+    }
+    if (currentDir === repoDir) {
+      break;
+    }
+    currentDir = path.dirname(currentDir);
+  }
+
+  return null;
+}
+
+async function detectReviewServiceInstallCommand(installRoot) {
+  if (!installRoot) {
+    return null;
+  }
+
+  if (await pathExists(path.join(installRoot, 'pnpm-lock.yaml'))) {
+    return {
+      command: 'corepack',
+      args: ['pnpm', 'install', '--frozen-lockfile', '--config.confirmModulesPurge=false'],
+    };
+  }
+
+  if (await pathExists(path.join(installRoot, 'yarn.lock'))) {
+    return {
+      command: 'corepack',
+      args: ['yarn', 'install', '--immutable'],
+    };
+  }
+
+  if (await pathExists(path.join(installRoot, 'package-lock.json'))) {
+    return {
+      command: 'npm',
+      args: ['install'],
+    };
+  }
+
+  return null;
+}
+
+async function reviewServiceNeedsDependencyBootstrap(installRoot, workspaceCwd) {
+  if (!installRoot) {
+    return false;
+  }
+
+  const rootNodeModulesMissing = !(await pathExists(path.join(installRoot, 'node_modules')));
+  if (rootNodeModulesMissing) {
+    return true;
+  }
+
+  if (workspaceCwd !== installRoot && await pathExists(path.join(workspaceCwd, 'package.json'))) {
+    return !(await pathExists(path.join(workspaceCwd, 'node_modules')));
+  }
+
+  return false;
+}
+
+async function ensureReviewServiceWorkspaceReady(service, workspace, preparedRepoPromises) {
+  const installRoot = await detectReviewServiceInstallRoot(workspace.repoDir, workspace.cwd);
+  if (!installRoot) {
+    return { installRoot: null, installed: false };
+  }
+
+  const key = installRoot;
+  if (!preparedRepoPromises.has(key)) {
+    preparedRepoPromises.set(
+      key,
+      (async () => {
+        const installCommand = await detectReviewServiceInstallCommand(installRoot);
+        if (!installCommand) {
+          return { installRoot, installed: false };
+        }
+
+        const needsBootstrap = await reviewServiceNeedsDependencyBootstrap(installRoot, workspace.cwd);
+        if (!needsBootstrap) {
+          return { installRoot, installed: false };
+        }
+
+        appendReviewServiceLog(service, `[setup] Installing dependencies in ${installRoot}`, 'stdout');
+        await runCommand(installCommand.command, installCommand.args, {
+          cwd: installRoot,
+          timeoutMs: 240000,
+          env: {
+            PATH: process.env.PATH || '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+            CI: 'true',
+          },
+        });
+        appendReviewServiceLog(service, `[setup] Dependencies ready in ${installRoot}`, 'stdout');
+        return { installRoot, installed: true };
+      })()
+    );
+  }
+
+  return await preparedRepoPromises.get(key);
+}
+
+async function stopConflictingProjectReviewSessions(project, configuredServices, excludedTaskId, nextTaskTitle) {
+  const targetIdentities = new Set(
+    (Array.isArray(configuredServices) ? configuredServices : [])
+      .map((service) => buildReviewServiceIdentity(service))
+      .filter(Boolean)
+  );
+
+  if (!targetIdentities.size) {
+    return [];
+  }
+
+  const stoppedTasks = [];
+  for (const [taskId, session] of Array.from(reviewSessions.entries())) {
+    if (!session || taskId === excludedTaskId) {
+      continue;
+    }
+    if (String(session.projectName || '') !== String(project?.name || '')) {
+      continue;
+    }
+
+    const overlaps = (Array.isArray(session.services) ? session.services : []).some((service) => targetIdentities.has(buildReviewServiceIdentity(service)));
+    if (!overlaps) {
+      continue;
+    }
+
+    await stopTaskReviewEnvironment(taskId, { quiet: true });
+    stoppedTasks.push(session.taskTitle || taskId);
+  }
+
+  if (stoppedTasks.length) {
+    pushActivity(
+      `Stopped ${stoppedTasks.length} conflicting review environment${stoppedTasks.length === 1 ? '' : 's'} before launching ${nextTaskTitle}.`,
+      'warning'
+    );
+  }
+
+  return stoppedTasks;
 }
 
 function refreshReviewSessionStatus(task, session) {
@@ -1952,6 +2295,8 @@ async function startTaskReviewEnvironment(task) {
     throw new Error(`Review service ${invalid.name || 'unnamed service'} is missing a start command.`);
   }
 
+  await stopConflictingProjectReviewSessions(project, configuredServices, task.id, task.title);
+
   const session = {
     taskId: task.id,
     taskTitle: task.title,
@@ -1964,10 +2309,33 @@ async function startTaskReviewEnvironment(task) {
   };
   reviewSessions.set(task.id, session);
   pushActivity(`Starting review environment for ${task.title}.`, 'busy');
+  const preparedRepoPromises = new Map();
 
   try {
     for (const configuredService of configuredServices) {
       const workspace = await resolveReviewServiceWorkspace(task, project, configuredService);
+      const service = {
+        id: configuredService.id,
+        name: configuredService.name || configuredService.repoRole || 'Review service',
+        status: 'starting',
+        repoRole: configuredService.repoRole,
+        repoUrl: workspace.repo.url,
+        cwd: workspace.cwd,
+        branchName: workspace.branchName || null,
+        startCommand: configuredService.startCommand,
+        localUrl: configuredService.localUrl,
+        healthcheckUrl: configuredService.healthcheckUrl,
+        pid: null,
+        startedAt: Date.now(),
+        logLines: [],
+        error: null,
+        process: null,
+        exitPromise: null,
+      };
+      session.services.push(service);
+
+      await ensureReviewServiceWorkspaceReady(service, workspace, preparedRepoPromises);
+
       const child = spawn('sh', ['-lc', configuredService.startCommand], {
         cwd: workspace.cwd,
         env: {
@@ -1978,24 +2346,8 @@ async function startTaskReviewEnvironment(task) {
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-
-      const service = {
-        id: configuredService.id,
-        name: configuredService.name || configuredService.repoRole || 'Review service',
-        status: 'starting',
-        repoRole: configuredService.repoRole,
-        repoUrl: workspace.repo.url,
-        cwd: workspace.cwd,
-        startCommand: configuredService.startCommand,
-        localUrl: configuredService.localUrl,
-        healthcheckUrl: configuredService.healthcheckUrl,
-        pid: child.pid,
-        startedAt: Date.now(),
-        logLines: [],
-        error: null,
-        process: child,
-        exitPromise: null,
-      };
+      service.pid = child.pid;
+      service.process = child;
 
       child.stdout.on('data', (chunk) => {
         appendReviewServiceLog(service, chunk, 'stdout');
@@ -2036,7 +2388,6 @@ async function startTaskReviewEnvironment(task) {
         refreshReviewSessionStatus(task, session);
       });
 
-      session.services.push(service);
       monitorReviewService(task, session, service).catch(() => {});
     }
   } catch (error) {
@@ -2100,6 +2451,62 @@ async function resolveDefaultBranch(repoDir) {
   return localBranch.stdout.trim() || null;
 }
 
+function buildTaskRepoWorkspaceDir(task, repo, workspaceKind = 'task') {
+  if (workspaceKind === 'task') {
+    return path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
+  }
+
+  const repoKey = sanitizePathSegment(
+    repo?.role || repo?.label || normalizeRepoUrl(repo?.url || '') || 'repo'
+  );
+  return path.join(AGENT_WORKSPACES_DIR, `${sanitizePathSegment(task.id)}--${repoKey}`);
+}
+
+async function ensureTaskRepoWorkspace(task, project, repo, options = {}) {
+  const { workspaceKind = 'task' } = options;
+  const ensured = await ensureProjectRepoClone(project, repo);
+  const cloneDir = ensured.repoDir;
+  const branchName = `task-${sanitizePathSegment(task.id)}`;
+
+  if (!(await repoHasCommits(cloneDir))) {
+    await runCommand(GIT_BIN, ['checkout', '--orphan', branchName], { cwd: cloneDir }).catch(() => {});
+    return {
+      repo: ensured.repo,
+      cloneDir,
+      workspaceDir: cloneDir,
+      branchName,
+    };
+  }
+
+  const workspaceDir = buildTaskRepoWorkspaceDir(task, ensured.repo, workspaceKind);
+  const defaultBranch = await resolveDefaultBranch(cloneDir);
+
+  if (!(await pathExists(path.join(workspaceDir, '.git')))) {
+    if (await pathExists(workspaceDir)) {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+    const baseRef = defaultBranch ? `origin/${defaultBranch}` : 'HEAD';
+    await runCommand(GIT_BIN, ['worktree', 'add', '-B', branchName, workspaceDir, baseRef], { cwd: cloneDir });
+  }
+
+  const currentBranch = await getCurrentBranch(workspaceDir);
+  if (currentBranch !== branchName) {
+    try {
+      await runCommand(GIT_BIN, ['checkout', branchName], { cwd: workspaceDir });
+    } catch {
+      const baseRef = defaultBranch ? `origin/${defaultBranch}` : 'HEAD';
+      await runCommand(GIT_BIN, ['checkout', '-B', branchName, baseRef], { cwd: workspaceDir });
+    }
+  }
+
+  return {
+    repo: ensured.repo,
+    cloneDir,
+    workspaceDir,
+    branchName,
+  };
+}
+
 async function repoHasCommits(repoDir) {
   try {
     await runCommand(GIT_BIN, ['rev-parse', '--verify', 'HEAD'], { cwd: repoDir });
@@ -2124,46 +2531,12 @@ async function prepareTaskExecutionContext(task) {
     };
   }
 
-  const ensured = await ensureProjectRepoClone(project, targetRepo);
-  const repoDir = ensured.repoDir;
-  const branchName = `task-${sanitizePathSegment(task.id)}`;
+  const workspace = await ensureTaskRepoWorkspace(task, project, targetRepo, { workspaceKind: 'task' });
+  const repoDir = workspace.cloneDir;
+  const worktreeDir = workspace.workspaceDir;
+  const branchName = workspace.branchName;
   const projectRepos = getProjectRepos(project);
   const linkedRepos = [];
-
-  if (!(await repoHasCommits(repoDir))) {
-    await runCommand(GIT_BIN, ['checkout', '--orphan', branchName], { cwd: repoDir }).catch(() => {});
-    for (const repo of projectRepos) {
-      const linkedRepoDir = normalizeRepoUrl(repo.url) === normalizeRepoUrl(targetRepo.url)
-        ? repoDir
-        : (await ensureProjectRepoClone(project, repo)).repoDir;
-      linkedRepos.push({
-        repo,
-        localPath: linkedRepoDir,
-        documentation: isDocumentationRepo(repo),
-        entryPoints: await getRepoDocumentationEntryPoints(linkedRepoDir),
-      });
-    }
-    return {
-      cwd: repoDir,
-      project,
-      primaryRepo: targetRepo,
-      defaultProjectRepo,
-      repoDir,
-      branchName,
-      linkedRepos,
-    };
-  }
-
-  const defaultBranch = await resolveDefaultBranch(repoDir);
-  const worktreeDir = path.join(AGENT_WORKSPACES_DIR, sanitizePathSegment(task.id));
-
-  if (!(await pathExists(path.join(worktreeDir, '.git')))) {
-    if (await pathExists(worktreeDir)) {
-      await fs.rm(worktreeDir, { recursive: true, force: true });
-    }
-    const baseRef = defaultBranch ? `origin/${defaultBranch}` : 'HEAD';
-    await runCommand(GIT_BIN, ['worktree', 'add', '-B', branchName, worktreeDir, baseRef], { cwd: repoDir });
-  }
 
   for (const repo of projectRepos) {
     const linkedRepoDir = normalizeRepoUrl(repo.url) === normalizeRepoUrl(targetRepo.url)
@@ -2768,6 +3141,7 @@ function normalizeTaskRecord(task) {
     completedAt: Number(task.completedAt || 0) || null,
     repoRole: String(task.repoRole || '').trim(),
     docSyncSourceTaskId: task.docSyncSourceTaskId ? String(task.docSyncSourceTaskId) : null,
+    reviewIssueSourceTaskId: task.reviewIssueSourceTaskId ? String(task.reviewIssueSourceTaskId) : null,
     timeMetrics: normalizeTaskTimeMetrics(task.timeMetrics),
   };
 }

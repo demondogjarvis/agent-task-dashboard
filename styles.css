@@ -579,6 +579,14 @@ p {
   background: rgba(63, 148, 109, 0.12);
 }
 
+.tag-link {
+  text-decoration: none;
+}
+
+.tag-link:hover {
+  text-decoration: underline;
+}
+
 .pill.warning {
   color: var(--warning);
   background: rgba(185, 122, 43, 0.12);
@@ -1081,6 +1089,50 @@ textarea:focus {
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 10px;
   margin-top: 10px;
+}
+
+.project-service-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.service-status-card {
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(244, 233, 248, 0.64);
+  border: 1px solid rgba(89, 48, 104, 0.08);
+}
+
+.service-status-ready {
+  border-color: rgba(46, 125, 50, 0.22);
+}
+
+.service-status-failed {
+  border-color: rgba(183, 28, 28, 0.22);
+}
+
+.service-status-starting {
+  border-color: rgba(239, 108, 0, 0.22);
+}
+
+.service-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.service-status-detail {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.service-status-meta {
+  margin-top: 8px;
 }
 
 .project-stat-card {

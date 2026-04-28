@@ -106,6 +106,7 @@ const taskBoardEmpty = document.getElementById('task-board-empty');
 const taskBoardTitle = document.getElementById('task-board-title');
 const taskBoardDescription = document.getElementById('task-board-description');
 const taskBoardProjectStats = document.getElementById('task-board-project-stats');
+const taskBoardProjectServices = document.getElementById('task-board-project-services');
 const taskBoardContextPill = document.getElementById('task-board-context-pill');
 const projectFormModePill = document.getElementById('project-form-mode-pill');
 const projectForm = document.getElementById('project-form');
@@ -394,6 +395,143 @@ function getProjectForTask(task) {
 function getTasksForProject(project) {
   const projectName = typeof project === 'string' ? project : project?.name;
   return dashboard.tasks.filter((task) => task.owner === projectName);
+}
+
+function getReviewServiceStatusPriority(status) {
+  const rank = {
+    failed: 0,
+    starting: 1,
+    ready: 2,
+    stopping: 3,
+    stopped: 4,
+    idle: 5,
+  };
+  return rank[String(status || '').trim().toLowerCase()] ?? 9;
+}
+
+function getReviewServiceSelectionPriority(status) {
+  const rank = {
+    ready: 0,
+    starting: 1,
+    failed: 2,
+    stopping: 3,
+    stopped: 4,
+    idle: 5,
+  };
+  return rank[String(status || '').trim().toLowerCase()] ?? 9;
+}
+
+function getProjectReviewServiceOverview(project) {
+  const configuredServices = getProjectReviewServices(project);
+  const activeTasks = getTasksForProject(project).filter((task) => task.reviewEnvironment);
+  const activeByServiceKey = new Map();
+
+  activeTasks.forEach((task) => {
+    const reviewEnvironment = task.reviewEnvironment || null;
+    (reviewEnvironment?.services || []).forEach((service) => {
+      const key = service.id || `${service.name || service.repoRole || 'service'}:${service.repoRole || ''}`;
+      const candidate = {
+        key,
+        name: service.name || service.repoRole || 'Service',
+        status: service.status || reviewEnvironment?.status || 'idle',
+        branchName: service.branchName || null,
+        taskTitle: task.title,
+        taskId: task.id,
+        localUrl: service.localUrl || '',
+        message: service.error || service.startupIssue || reviewEnvironment?.message || '',
+        repoRole: service.repoRole || '',
+        updatedAt: Number(reviewEnvironment?.updatedAt || 0) || 0,
+      };
+
+      const current = activeByServiceKey.get(key);
+      if (!current) {
+        activeByServiceKey.set(key, candidate);
+        return;
+      }
+
+      const candidatePriority = getReviewServiceSelectionPriority(candidate.status);
+      const currentPriority = getReviewServiceSelectionPriority(current.status);
+      if (candidatePriority < currentPriority || (candidatePriority === currentPriority && candidate.updatedAt >= current.updatedAt)) {
+        activeByServiceKey.set(key, candidate);
+      }
+    });
+  });
+
+  const seen = new Set();
+  const items = [];
+
+  configuredServices.forEach((service) => {
+    const key = service.id || `${service.name || service.repoRole || 'service'}:${service.repoRole || ''}`;
+    seen.add(key);
+    const match = activeByServiceKey.get(key) || null;
+    if (match) {
+      items.push(match);
+      return;
+    }
+    items.push({
+      key,
+      name: service.name || service.repoRole || 'Service',
+      status: 'idle',
+      branchName: null,
+      taskTitle: '',
+      taskId: '',
+      localUrl: service.localUrl || '',
+      message: 'Idle, waiting for Start service.',
+      repoRole: service.repoRole || '',
+    });
+  });
+
+  activeByServiceKey.forEach((match, key) => {
+    if (!seen.has(key)) {
+      items.push(match);
+    }
+  });
+
+  return items.sort((a, b) => getReviewServiceStatusPriority(a.status) - getReviewServiceStatusPriority(b.status)
+    || a.name.localeCompare(b.name)
+    || a.taskTitle.localeCompare(b.taskTitle));
+}
+
+function buildProjectReviewServiceCards(project) {
+  const services = getProjectReviewServiceOverview(project);
+  if (!services.length) {
+    return '';
+  }
+
+  return services
+    .map((service) => `
+      <article class="service-status-card service-status-${escapeHtml((service.status || 'idle').toLowerCase())}">
+        <div class="service-status-header">
+          <strong>${escapeHtml(service.name || 'Service')}</strong>
+          <span class="pill neutral">${escapeHtml(service.status || 'idle')}</span>
+        </div>
+        <p class="service-status-detail">${escapeHtml(service.message || 'No service activity yet.')}</p>
+        <div class="task-meta service-status-meta">
+          ${service.repoRole ? `<span class="tag">${escapeHtml(service.repoRole)}</span>` : ''}
+          ${service.branchName ? `<span class="tag">Branch: ${escapeHtml(service.branchName)}</span>` : '<span class="tag">Branch pending</span>'}
+          ${service.taskId ? `<span class="tag">${escapeHtml(service.taskId)}</span>` : ''}
+          ${service.taskTitle ? `<span class="tag">Task: ${escapeHtml(service.taskTitle)}</span>` : ''}
+          ${service.localUrl ? (String(service.status || '').toLowerCase() === 'ready'
+            ? `<a class="tag tag-link" href="${escapeHtml(service.localUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(service.localUrl)}</a>`
+            : `<span class="tag">${escapeHtml(service.localUrl)}</span>`) : ''}
+        </div>
+      </article>
+    `)
+    .join('');
+}
+
+function getReviewIssueSummary(task) {
+  const reviewEnvironment = task?.reviewEnvironment || null;
+  if (!reviewEnvironment) {
+    return '';
+  }
+
+  const issueService = (reviewEnvironment.services || []).find((service) => service?.error || service?.startupIssue) || null;
+  return issueService?.error || issueService?.startupIssue || (reviewEnvironment.status === 'failed' ? reviewEnvironment.message || '' : '');
+}
+
+function hasRepairableReviewIssue(task) {
+  return Boolean(getReviewIssueSummary(task));
 }
 
 function getTaskBoardTasks() {
@@ -965,13 +1103,18 @@ function buildTaskActions(task, options = {}) {
   } else if (task.lane === 'ready') {
     actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="assign" data-task-id="${task.id}" ${blocked ? `disabled title="${escapeHtml(formatBlockingSummary(task))}"` : ''}>${blocked ? 'Blocked' : 'Assign'}</button>`);
   } else if (task.lane === 'review') {
-    if (reviewEnvironment?.openUrl && reviewEnvironment.status !== 'stopping') {
+    if (reviewEnvironment?.status === 'ready' && reviewEnvironment.openUrl) {
       actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="open-review" data-task-id="${task.id}">Open service</button>`);
+    } else if (reviewEnvironment?.status === 'starting') {
+      actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" disabled title="Wait until the review services report ready.">Open when ready</button>`);
     }
     if (reviewEnvironment && ['starting', 'ready', 'stopping'].includes(reviewEnvironment.status)) {
       actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="stop-review" data-task-id="${task.id}">${reviewEnvironment.status === 'stopping' ? 'Stopping…' : 'Stop service'}</button>`);
     } else if (reviewServices.length) {
       actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="start-review" data-task-id="${task.id}">${reviewLabel}</button>`);
+    }
+    if (hasRepairableReviewIssue(task)) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="create-review-fix-task" data-task-id="${task.id}">Create repair task</button>`);
     }
     actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
   } else if (task.lane === 'definition') {
@@ -1303,6 +1446,11 @@ function renderKanban() {
         roleTag.textContent = task.repoRole;
         node.querySelector('.task-meta').appendChild(roleTag);
       }
+
+      const idTag = document.createElement('span');
+      idTag.className = 'tag';
+      idTag.textContent = task.id;
+      node.querySelector('.task-meta').appendChild(idTag);
 
       if (lane.id === 'done') {
         const completedTag = document.createElement('span');
@@ -1766,6 +1914,10 @@ function renderTaskBoardContext() {
     if (taskBoardTitle) taskBoardTitle.textContent = 'Define work before agents touch it';
     if (taskBoardDescription) taskBoardDescription.textContent = 'Open a project board above to create project-scoped tasks.';
     if (taskBoardProjectStats) taskBoardProjectStats.innerHTML = '';
+    if (taskBoardProjectServices) {
+      taskBoardProjectServices.hidden = true;
+      taskBoardProjectServices.innerHTML = '';
+    }
     if (taskBoardContextPill) taskBoardContextPill.textContent = 'Select a project';
     return;
   }
@@ -1782,6 +1934,11 @@ function renderTaskBoardContext() {
       lifetimeStats,
       primaryScopeLabel: 'Current board',
     });
+  }
+  if (taskBoardProjectServices) {
+    const serviceCards = buildProjectReviewServiceCards(project);
+    taskBoardProjectServices.hidden = !serviceCards;
+    taskBoardProjectServices.innerHTML = serviceCards;
   }
   if (taskBoardContextPill) taskBoardContextPill.textContent = `Project: ${project.name}`;
 }
@@ -1966,13 +2123,14 @@ function renderTaskDetail() {
   const reviewEnvironment = task.reviewEnvironment || null;
   const reviewServiceSummary = reviewEnvironment?.services?.length
     ? reviewEnvironment.services
-        .map((service) => `${service.name}: ${service.status}${service.localUrl ? ` (${service.localUrl})` : ''}`)
+        .map((service) => `${service.name}: ${service.status}${service.branchName ? ` on ${service.branchName}` : ''}${service.localUrl ? ` (${service.localUrl})` : ''}`)
         .join(' • ')
     : '';
-  const reviewFailure = reviewEnvironment?.services?.find((service) => service.error)?.error || '';
+  const reviewFailure = getReviewIssueSummary(task);
   const blockingSummary = formatBlockingSummary(task);
   const splitProgress = formatSplitProgress(task);
   const detailTags = [
+    task.id,
     task.priority,
     skillLabels[task.skill] || task.skill,
     task.repoRole || null,
@@ -2287,11 +2445,19 @@ document.addEventListener('click', (event) => {
   if (action === 'open-review') {
     const task = dashboard.tasks.find((item) => item.id === taskId);
     const openUrl = task?.reviewEnvironment?.openUrl;
-    if (!openUrl) {
-      window.alert('No local review URL is ready yet for this task.');
+    if (!openUrl || task?.reviewEnvironment?.status !== 'ready') {
+      window.alert(task?.reviewEnvironment?.message || 'No local review URL is ready yet for this task.');
       return;
     }
     window.open(openUrl, '_blank', 'noopener,noreferrer');
+  }
+  if (action === 'create-review-fix-task') {
+    mutate(async () => {
+      const response = await api(`/api/tasks/${taskId}/create-review-fix-task`, { method: 'POST' });
+      if (response?.task?.id) {
+        selectedTaskId = response.task.id;
+      }
+    });
   }
   if (action === 'move-right') {
     mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: 1 }) }));
