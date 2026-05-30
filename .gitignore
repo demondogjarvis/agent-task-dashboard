@@ -1,2 +1,8 @@
 agent-workspaces/
+logs/
+data/state.json
+data/google-search-console-connection.json
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 *.log

@@ -20,8 +20,22 @@
           <button class="nav-link" data-view-link="tasks">Tasks</button>
           <button class="nav-link" data-view-link="agents">Agents</button>
           <button class="nav-link" data-view-link="runtime">Runtime</button>
+          <button class="nav-link" data-view-link="projects">Projects</button>
+          <button class="nav-link" data-view-link="keywords">Keywords</button>
           <button class="nav-link" data-view-link="history">History</button>
+          <button class="nav-link" data-view-link="system-history">System History</button>
         </nav>
+
+        <label class="theme-toggle" for="theme-toggle-button">
+          <span class="theme-toggle-copy">
+            <span class="theme-toggle-title">Theme</span>
+            <span id="theme-toggle-label" class="theme-toggle-label">Light mode</span>
+          </span>
+          <input id="theme-toggle-button" type="checkbox" class="theme-toggle-input" role="switch" aria-label="Toggle dark mode" />
+          <span class="theme-toggle-track" aria-hidden="true">
+            <span class="theme-toggle-thumb"></span>
+          </span>
+        </label>
 
         <div class="sidebar-card">
           <p class="eyebrow">What changed</p>
@@ -37,9 +51,10 @@
             <p id="page-description" class="subtitle"></p>
           </div>
           <div class="topbar-actions">
+            <span id="mutate-status" class="pill neutral working-pill" hidden>Working…</span>
             <button id="new-task-button" class="button primary">New task</button>
             <button id="refresh-button" class="button ghost">Refresh live data</button>
-            <button id="reset-button" class="button ghost danger">Reset board</button>
+            <button id="restart-server-button" class="button ghost">Restart server</button>
           </div>
         </header>
 
@@ -94,75 +109,296 @@
         </section>
 
         <section class="page-view" data-view="tasks">
-          <div class="control-grid">
-            <article class="panel composer-panel">
+          <article class="panel project-board-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Project boards</p>
+                <h3>Open a project-specific kanban</h3>
+              </div>
+              <span class="pill neutral" id="task-board-count-pill">0 projects</span>
+            </div>
+            <p id="task-board-summary" class="subtitle"></p>
+            <div id="task-board-list" class="project-board-list"></div>
+          </article>
+
+          <div id="task-board-shell" hidden>
+            <div class="control-grid">
+              <article class="panel composer-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">Task intake</p>
+                    <h3 id="task-board-title">Define work before agents touch it</h3>
+                    <p id="task-board-description" class="subtitle"></p>
+                    <div id="task-board-project-stats" class="project-stats-grid"></div>
+                    <div id="task-board-project-services" class="project-service-status-grid" hidden></div>
+                  </div>
+                  <span class="pill neutral" id="task-board-context-pill">Approval gate enforced</span>
+                </div>
+                <form id="task-form" class="task-form">
+                  <label>
+                    Task title
+                    <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
+                  </label>
+                  <label>
+                    Priority
+                    <select id="task-priority" name="priority">
+                      <option value="critical">Critical</option>
+                      <option value="high">High</option>
+                      <option value="medium" selected>Medium</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preferred agent
+                    <select id="task-agent" name="agentId"></select>
+                  </label>
+                  <label id="task-owner-field">
+                    Project
+                    <select id="task-owner" name="owner"></select>
+                  </label>
+                  <label class="wide">
+                    Definition notes
+                    <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
+                  </label>
+                  <div class="form-actions wide">
+                    <button type="submit" class="button primary">Create task</button>
+                    <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
+                  </div>
+                </form>
+              </article>
+
+              <article class="panel approvals-panel">
+                <div class="panel-header">
+                  <div>
+                    <p class="eyebrow">Approvals</p>
+                    <h3>Queue that agents cannot bypass</h3>
+                  </div>
+                  <span class="pill warning" id="approval-count-pill">0 waiting</span>
+                </div>
+                <div id="approval-list" class="approval-list"></div>
+              </article>
+            </div>
+
+            <section class="kanban-wrapper panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Task intake</p>
-                  <h3>Define work before agents touch it</h3>
+                  <p class="eyebrow">Execution lanes</p>
+                  <h3>Kanban for staged agent work</h3>
+                  <p class="subtitle">Drag cards within a lane to make the top card the next one to tackle.</p>
                 </div>
-                <span class="pill neutral">Approval gate enforced</span>
+                <div class="legend">
+                  <span><i class="dot critical"></i>Critical</span>
+                  <span><i class="dot high"></i>High</span>
+                  <span><i class="dot medium"></i>Medium</span>
+                  <span><i class="dot low"></i>Low</span>
+                </div>
               </div>
-              <form id="task-form" class="task-form">
+              <div id="kanban-board" class="kanban-board"></div>
+            </section>
+          </div>
+
+          <article id="task-board-empty" class="panel empty-state-panel">
+            <h3>Select a project to open its board</h3>
+            <p>Each project gets its own kanban and task intake flow, so new tasks inherit the project automatically.</p>
+          </article>
+        </section>
+        <section class="page-view" data-view="projects">
+          <div class="projects-grid">
+            <article class="panel project-form-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Project intake</p>
+                  <h3>Manage the projects tasks can be assigned to</h3>
+                </div>
+                <span class="pill neutral" id="project-form-mode-pill">Create</span>
+              </div>
+              <form id="project-form" class="project-form">
                 <label>
-                  Task title
-                  <input id="task-title" name="title" type="text" placeholder="Client billing import hardening" required />
+                  Project name
+                  <input id="project-name" name="name" type="text" placeholder="Agent Control" required />
+                </label>
+                <label>
+                  Git commit rules
+                  <select id="project-git-workflow" name="gitWorkflow">
+                    <option value="direct-main">Update main directly</option>
+                    <option value="feature-branches" selected>Use feature branches</option>
+                    <option value="agent-branch">Dedicated agent branch</option>
+                  </select>
+                </label>
+                <label class="project-config-inline wide">
+                  <input id="project-keep-docs-up-to-date" name="keepDocumentationUpToDate" type="checkbox" />
+                  Keep documentation up to date automatically when tasks move to Done
+                </label>
+                <section class="project-config-section wide">
+                  <div class="project-config-header">
+                    <div>
+                      <p class="eyebrow">Repositories</p>
+                      <h4>Link one or more GitHub repos to this project</h4>
+                    </div>
+                    <button type="button" id="add-project-repo-button" class="button ghost compact-action">Add repo</button>
+                  </div>
+                  <div id="project-repo-list" class="project-config-list"></div>
+                </section>
+                <section class="project-config-section wide">
+                  <div class="project-config-header">
+                    <div>
+                      <p class="eyebrow">Review run config</p>
+                      <h4>Describe how services should start for local review later</h4>
+                    </div>
+                    <button type="button" id="add-project-service-button" class="button ghost compact-action">Add service</button>
+                  </div>
+                  <div id="project-service-list" class="project-config-list"></div>
+                </section>
+                <label class="wide">
+                  Notes
+                  <textarea id="project-notes" name="notes" rows="3" placeholder="Optional context, conventions, or owner notes"></textarea>
+                </label>
+                <div class="form-actions wide">
+                  <button type="submit" id="project-submit-button" class="button primary">Create project</button>
+                  <button type="button" id="project-cancel-button" class="button ghost" hidden>Cancel edit</button>
+                </div>
+              </form>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Projects</p>
+                  <h3>Linked projects used in task dropdowns</h3>
+                </div>
+                <span class="pill neutral" id="project-count-pill">0 projects</span>
+              </div>
+              <p id="project-summary" class="subtitle"></p>
+              <div id="project-list" class="project-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="keywords">
+          <div class="keywords-grid">
+            <article class="panel keyword-form-panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Keyword intake</p>
+                  <h3>Track search opportunities by project, market, and language</h3>
+                </div>
+                <span class="pill neutral" id="keyword-form-mode-pill">Create</span>
+              </div>
+              <section class="keyword-connection-panel" aria-labelledby="keyword-connection-title">
+                <div class="keyword-connection-header">
+                  <div>
+                    <p class="eyebrow">Search Console</p>
+                    <h4 id="keyword-connection-title">Google connection</h4>
+                  </div>
+                  <span class="pill neutral" id="keyword-connection-status-pill">Unknown</span>
+                </div>
+                <p id="keyword-connection-message" class="subtitle">Connection status will appear here.</p>
+                <div id="keyword-connection-meta" class="task-meta keyword-connection-meta"></div>
+                <div class="form-actions keyword-connection-actions">
+                  <button type="button" id="keyword-connect-button" class="button primary">Connect Google</button>
+                  <button type="button" id="keyword-disconnect-button" class="button ghost danger">Disconnect</button>
+                </div>
+              </section>
+              <form id="keyword-form" class="keyword-form">
+                <label>
+                  Project
+                  <select id="keyword-project" name="projectId"></select>
+                </label>
+                <label>
+                  Market
+                  <input id="keyword-market" name="market" type="text" placeholder="se, es, uk, global" required />
+                </label>
+                <label>
+                  Language
+                  <input id="keyword-language" name="language" type="text" placeholder="sv, es, en" required />
+                </label>
+                <label>
+                  Cluster / cloud
+                  <input id="keyword-cluster" name="cluster" type="text" placeholder="local seo, ai automations, accounting software" />
+                </label>
+                <label class="wide">
+                  Target keyword
+                  <input id="keyword-term" name="term" type="text" placeholder="business automation services" required />
+                </label>
+                <label>
+                  Intent
+                  <select id="keyword-intent" name="intent">
+                    <option value="informational">Informational</option>
+                    <option value="commercial">Commercial</option>
+                    <option value="transactional">Transactional</option>
+                    <option value="navigational">Navigational</option>
+                    <option value="local">Local</option>
+                  </select>
+                </label>
+                <label>
+                  Status
+                  <select id="keyword-status" name="status">
+                    <option value="idea">Idea</option>
+                    <option value="researching">Researching</option>
+                    <option value="targeting">Targeting</option>
+                    <option value="drafting">Drafting</option>
+                    <option value="published">Published</option>
+                    <option value="paused">Paused</option>
+                  </select>
                 </label>
                 <label>
                   Priority
-                  <select id="task-priority" name="priority">
-                    <option value="critical">Critical</option>
+                  <select id="keyword-priority" name="priority">
                     <option value="high">High</option>
                     <option value="medium" selected>Medium</option>
                     <option value="low">Low</option>
                   </select>
                 </label>
                 <label>
-                  Preferred agent
-                  <select id="task-agent" name="agentId"></select>
+                  Opportunity score
+                  <input id="keyword-score" name="opportunityScore" type="number" min="0" max="100" step="1" placeholder="65" />
                 </label>
                 <label>
-                  Project
-                  <select id="task-owner" name="owner"></select>
+                  Source
+                  <input id="keyword-source" name="source" type="text" placeholder="Search Console, manual, Google Ads" />
+                </label>
+                <label>
+                  Target page
+                  <input id="keyword-target-page" name="targetPage" type="text" placeholder="/blog/business-automation" />
                 </label>
                 <label class="wide">
-                  Definition notes
-                  <textarea id="task-notes" name="notes" rows="3" placeholder="Describe scope, acceptance criteria, and risks"></textarea>
+                  Notes
+                  <textarea id="keyword-notes" name="notes" rows="4" placeholder="Why this term matters, how intent differs by language, or what content should target it"></textarea>
                 </label>
                 <div class="form-actions wide">
-                  <button type="submit" class="button primary">Create task</button>
-                  <button type="button" id="seed-ready-button" class="button ghost">Create ready task</button>
+                  <button type="submit" id="keyword-submit-button" class="button primary">Create keyword</button>
+                  <button type="button" id="keyword-seed-button" class="button ghost">Load sample set</button>
+                  <button type="button" id="keyword-cancel-button" class="button ghost" hidden>Cancel edit</button>
                 </div>
               </form>
             </article>
 
-            <article class="panel approvals-panel">
+            <article class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Approvals</p>
-                  <h3>Queue that agents cannot bypass</h3>
+                  <p class="eyebrow">Keyword workspace</p>
+                  <h3>Search terms worth targeting</h3>
                 </div>
-                <span class="pill warning" id="approval-count-pill">0 waiting</span>
+                <span class="pill neutral" id="keyword-count-pill">0 keywords</span>
               </div>
-              <div id="approval-list" class="approval-list"></div>
+              <div class="keyword-toolbar">
+                <label>
+                  Project filter
+                  <select id="keyword-project-filter"></select>
+                </label>
+                <label>
+                  Status filter
+                  <select id="keyword-status-filter"></select>
+                </label>
+                <label class="keyword-search-field">
+                  Search
+                  <input id="keyword-search-filter" type="search" placeholder="Search term, cluster, source, or notes" />
+                </label>
+              </div>
+              <p id="keyword-summary" class="subtitle"></p>
+              <div id="keyword-list" class="keyword-list"></div>
             </article>
           </div>
-
-          <section class="kanban-wrapper panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow">Execution lanes</p>
-                <h3>Kanban for staged agent work</h3>
-              </div>
-              <div class="legend">
-                <span><i class="dot critical"></i>Critical</span>
-                <span><i class="dot high"></i>High</span>
-                <span><i class="dot medium"></i>Medium</span>
-                <span><i class="dot low"></i>Low</span>
-              </div>
-            </div>
-            <div id="kanban-board" class="kanban-board"></div>
-          </section>
         </section>
 
         <section class="page-view" data-view="agents">
@@ -233,6 +469,18 @@
             <article class="panel">
               <div class="panel-header">
                 <div>
+                  <p class="eyebrow">Run history</p>
+                  <h3>Durable agent execution log</h3>
+                </div>
+                <span class="pill neutral" id="run-count-pill">0 runs</span>
+              </div>
+              <p id="run-summary" class="subtitle"></p>
+              <div id="run-list" class="history-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
                   <p class="eyebrow">Completed work</p>
                   <h3>Done task history</h3>
                 </div>
@@ -243,8 +491,145 @@
             </article>
           </div>
         </section>
+
+        <section class="page-view" data-view="system-history">
+          <div class="history-layout">
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">OpenClaw task history</p>
+                  <h3>System-wide durable task runs</h3>
+                </div>
+                <span class="pill neutral" id="system-task-history-count-pill">0 tasks</span>
+              </div>
+              <p id="system-task-history-summary" class="subtitle"></p>
+              <div id="system-task-history-list" class="history-list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Session activity</p>
+                  <h3>System-wide agent session history</h3>
+                </div>
+                <span class="pill neutral" id="system-session-history-count-pill">0 sessions</span>
+              </div>
+              <p id="system-session-history-summary" class="subtitle"></p>
+              <div id="system-session-history-list" class="history-list"></div>
+            </article>
+          </div>
+        </section>
       </main>
     </div>
+
+    <aside id="task-detail-drawer" class="task-detail-drawer" aria-hidden="true">
+      <div id="task-detail-backdrop" class="task-detail-backdrop"></div>
+      <section class="task-detail-panel" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+        <div class="task-detail-header">
+          <div>
+            <p class="eyebrow">Task details</p>
+            <h3 id="task-detail-title">Task title</h3>
+          </div>
+          <div class="task-detail-header-actions">
+            <button type="button" id="task-detail-edit-toggle" class="button ghost">Edit</button>
+            <button type="button" id="task-detail-close" class="button ghost">Close</button>
+          </div>
+        </div>
+
+        <div id="task-detail-summary" class="task-detail-summary">
+          <div id="task-detail-tags" class="task-detail-tags"></div>
+          <p id="task-detail-notes" class="task-detail-copy"></p>
+        </div>
+
+        <section id="task-detail-edit-section" class="task-detail-section task-detail-edit-section" hidden>
+          <p class="eyebrow">Edit task</p>
+          <form id="task-edit-form" class="task-form task-detail-form">
+            <label>
+              Task title
+              <input id="task-edit-title" name="title" type="text" required />
+            </label>
+            <label>
+              Priority
+              <select id="task-edit-priority" name="priority">
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label>
+              Preferred agent
+              <select id="task-edit-agent" name="agentId"></select>
+            </label>
+            <label id="task-edit-owner-field">
+              Project
+              <select id="task-edit-owner" name="owner"></select>
+            </label>
+            <label class="wide">
+              Definition notes
+              <textarea id="task-edit-notes" name="notes" rows="4"></textarea>
+            </label>
+            <label class="wide">
+              Blocked by
+              <select id="task-edit-blocked-by" name="blockedBy" multiple size="5"></select>
+              <small class="field-help">Use Cmd/Ctrl click to select multiple blocker tasks. Only tasks from the same project can block this one.</small>
+            </label>
+            <div class="form-actions wide">
+              <button type="submit" class="button primary">Save changes</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="task-detail-section">
+          <div class="task-comments-header">
+            <p class="eyebrow">Comments</p>
+            <span id="task-comment-count" class="pill neutral">0 comments</span>
+          </div>
+          <div id="task-comment-list" class="history-list"></div>
+          <form id="task-comment-form" class="task-detail-comment-form">
+            <label class="modal-label">
+              Author
+              <input id="task-comment-author" name="author" type="text" placeholder="Bjorn, Jarvis, Atlas..." />
+            </label>
+            <label class="modal-label">
+              Comment
+              <textarea id="task-comment-body" name="comment" rows="3" placeholder="Add clarification, questions, or implementation notes"></textarea>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="button primary">Add comment</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="task-detail-section">
+          <div class="task-comments-header">
+            <p class="eyebrow">Automation time</p>
+            <span id="task-detail-time-savings-pill" class="pill neutral">No estimate</span>
+          </div>
+          <div id="task-detail-time-metrics" class="task-detail-time-metrics"></div>
+        </section>
+
+        <section class="task-detail-section">
+          <p class="eyebrow">Latest run</p>
+          <p id="task-detail-run-status" class="task-detail-copy"></p>
+          <p id="task-detail-output" class="task-run-note"></p>
+          <p id="task-detail-error" class="task-run-note error-note"></p>
+        </section>
+
+        <section class="task-detail-section">
+          <div class="task-comments-header">
+            <p class="eyebrow">Run history</p>
+            <span id="task-run-history-count" class="pill neutral">0 runs</span>
+          </div>
+          <div id="task-run-history" class="history-list"></div>
+        </section>
+
+        <section class="task-detail-section">
+          <p class="eyebrow">Task actions</p>
+          <div id="task-detail-actions" class="task-actions"></div>
+        </section>
+      </section>
+    </aside>
 
     <dialog id="reassign-dialog" class="modal-dialog">
       <form method="dialog" class="modal-card">
@@ -267,9 +652,29 @@
       </form>
     </dialog>
 
+    <dialog id="split-task-dialog" class="modal-dialog">
+      <form method="dialog" class="modal-card split-dialog-card">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Split with Jarvis</p>
+            <h3 id="split-task-title">Review the proposed child tasks</h3>
+          </div>
+        </div>
+
+        <p id="split-task-summary" class="subtitle"></p>
+        <div id="split-task-plan-list" class="split-plan-list"></div>
+
+        <div class="topbar-actions">
+          <button type="button" id="split-task-cancel-button" class="button ghost">Cancel</button>
+          <button type="button" id="split-task-confirm-button" class="button primary">Create child tasks</button>
+        </div>
+      </form>
+    </dialog>
+
     <template id="task-card-template">
       <article class="task-card">
         <div class="task-card-header">
+          <span class="task-drag-handle" aria-hidden="true">⋮⋮</span>
           <span class="priority-dot"></span>
           <span class="task-priority-label"></span>
           <span class="task-owner"></span>
@@ -280,6 +685,7 @@
           <span class="tag skill-tag"></span>
           <span class="tag assignee-tag"></span>
         </div>
+        <div class="task-time-meta" hidden></div>
         <div class="task-actions"></div>
       </article>
     </template>

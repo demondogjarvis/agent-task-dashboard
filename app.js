@@ -20,6 +20,14 @@ const viewMeta = {
     title: 'Tasks',
     description: 'Define work, approve it, and move it through the execution lanes.',
   },
+  projects: {
+    title: 'Projects',
+    description: 'Create and manage the project list that feeds task creation and task editing.',
+  },
+  keywords: {
+    title: 'Keywords',
+    description: 'Capture keyword opportunities, filter them by project and status, and keep the research queue actionable before API integrations exist.',
+  },
   agents: {
     title: 'Agents',
     description: 'Browse the specialist agents that exist, what they handle, and their current token footprint.',
@@ -32,12 +40,24 @@ const viewMeta = {
     title: 'History',
     description: 'Browse every completed task while the Done column stays focused on recent completions.',
   },
+  'system-history': {
+    title: 'System History',
+    description: 'Review broader OpenClaw task history and session activity outside the dashboard-owned run log.',
+  },
 };
 
 let dashboard = null;
 let pollHandle = null;
 let isMutating = false;
 let pendingReassignTaskId = null;
+let pendingSplitTaskId = null;
+let selectedTaskId = null;
+let taskDetailDraftTaskId = null;
+let isTaskEditMode = false;
+let selectedProjectId = null;
+let selectedTaskBoardProjectId = null;
+let selectedKeywordId = null;
+let dragState = null;
 
 const statsGrid = document.getElementById('stats-grid');
 const approvalList = document.getElementById('approval-list');
@@ -57,25 +77,145 @@ const sessionList = document.getElementById('session-list');
 const backgroundTaskList = document.getElementById('background-task-list');
 const historyList = document.getElementById('history-list');
 const historySummary = document.getElementById('history-summary');
+const runList = document.getElementById('run-list');
+const runSummary = document.getElementById('run-summary');
+const systemTaskHistoryList = document.getElementById('system-task-history-list');
+const systemTaskHistorySummary = document.getElementById('system-task-history-summary');
+const systemTaskHistoryCountPill = document.getElementById('system-task-history-count-pill');
+const systemSessionHistoryList = document.getElementById('system-session-history-list');
+const systemSessionHistorySummary = document.getElementById('system-session-history-summary');
+const systemSessionHistoryCountPill = document.getElementById('system-session-history-count-pill');
 const taskForm = document.getElementById('task-form');
 const tokenTotalPill = document.getElementById('token-total-pill');
 const runningAgentsPill = document.getElementById('running-agents-pill');
 const sessionCountPill = document.getElementById('session-count-pill');
 const backgroundTaskPill = document.getElementById('background-task-pill');
 const historyCountPill = document.getElementById('history-count-pill');
+const runCountPill = document.getElementById('run-count-pill');
 const agentCountPill = document.getElementById('agent-count-pill');
-const resetButton = document.getElementById('reset-button');
 const seedReadyButton = document.getElementById('seed-ready-button');
 const newTaskButton = document.getElementById('new-task-button');
 const refreshButton = document.getElementById('refresh-button');
+const restartServerButton = document.getElementById('restart-server-button');
+const mutateStatus = document.getElementById('mutate-status');
 const pageTitle = document.getElementById('page-title');
 const pageDescription = document.getElementById('page-description');
+const projectList = document.getElementById('project-list');
+const projectSummary = document.getElementById('project-summary');
+const projectCountPill = document.getElementById('project-count-pill');
+const taskBoardList = document.getElementById('task-board-list');
+const taskBoardSummary = document.getElementById('task-board-summary');
+const taskBoardCountPill = document.getElementById('task-board-count-pill');
+const taskBoardShell = document.getElementById('task-board-shell');
+const taskBoardEmpty = document.getElementById('task-board-empty');
+const taskBoardTitle = document.getElementById('task-board-title');
+const taskBoardDescription = document.getElementById('task-board-description');
+const taskBoardProjectStats = document.getElementById('task-board-project-stats');
+const taskBoardProjectServices = document.getElementById('task-board-project-services');
+const taskBoardContextPill = document.getElementById('task-board-context-pill');
+const projectFormModePill = document.getElementById('project-form-mode-pill');
+const projectForm = document.getElementById('project-form');
+const projectNameInput = document.getElementById('project-name');
+const projectRepoList = document.getElementById('project-repo-list');
+const addProjectRepoButton = document.getElementById('add-project-repo-button');
+const projectServiceList = document.getElementById('project-service-list');
+const addProjectServiceButton = document.getElementById('add-project-service-button');
+const projectNotesInput = document.getElementById('project-notes');
+const projectGitWorkflowSelect = document.getElementById('project-git-workflow');
+const projectKeepDocsUpToDateInput = document.getElementById('project-keep-docs-up-to-date');
+const projectSubmitButton = document.getElementById('project-submit-button');
+const projectCancelButton = document.getElementById('project-cancel-button');
+const keywordFormModePill = document.getElementById('keyword-form-mode-pill');
+const keywordForm = document.getElementById('keyword-form');
+const keywordProjectSelect = document.getElementById('keyword-project');
+const keywordMarketInput = document.getElementById('keyword-market');
+const keywordLanguageInput = document.getElementById('keyword-language');
+const keywordClusterInput = document.getElementById('keyword-cluster');
+const keywordTermInput = document.getElementById('keyword-term');
+const keywordIntentSelect = document.getElementById('keyword-intent');
+const keywordStatusSelect = document.getElementById('keyword-status');
+const keywordPrioritySelect = document.getElementById('keyword-priority');
+const keywordScoreInput = document.getElementById('keyword-score');
+const keywordSourceInput = document.getElementById('keyword-source');
+const keywordTargetPageInput = document.getElementById('keyword-target-page');
+const keywordNotesInput = document.getElementById('keyword-notes');
+const keywordSubmitButton = document.getElementById('keyword-submit-button');
+const keywordSeedButton = document.getElementById('keyword-seed-button');
+const keywordCancelButton = document.getElementById('keyword-cancel-button');
+const keywordCountPill = document.getElementById('keyword-count-pill');
+const keywordProjectFilter = document.getElementById('keyword-project-filter');
+const keywordStatusFilter = document.getElementById('keyword-status-filter');
+const keywordSearchFilter = document.getElementById('keyword-search-filter');
+const keywordSummary = document.getElementById('keyword-summary');
+const keywordList = document.getElementById('keyword-list');
+const keywordConnectionStatusPill = document.getElementById('keyword-connection-status-pill');
+const keywordConnectionMessage = document.getElementById('keyword-connection-message');
+const keywordConnectionMeta = document.getElementById('keyword-connection-meta');
+const keywordConnectButton = document.getElementById('keyword-connect-button');
+const keywordDisconnectButton = document.getElementById('keyword-disconnect-button');
+const taskOwnerField = document.getElementById('task-owner-field');
+const taskDetailDrawer = document.getElementById('task-detail-drawer');
+const taskDetailBackdrop = document.getElementById('task-detail-backdrop');
+const taskDetailCloseButton = document.getElementById('task-detail-close');
+const taskDetailEditToggle = document.getElementById('task-detail-edit-toggle');
+const taskDetailTitle = document.getElementById('task-detail-title');
+const taskDetailSummary = document.getElementById('task-detail-summary');
+const taskDetailTags = document.getElementById('task-detail-tags');
+const taskDetailNotes = document.getElementById('task-detail-notes');
+const taskDetailEditSection = document.getElementById('task-detail-edit-section');
+const taskEditForm = document.getElementById('task-edit-form');
+const taskEditTitle = document.getElementById('task-edit-title');
+const taskEditPriority = document.getElementById('task-edit-priority');
+const taskEditAgent = document.getElementById('task-edit-agent');
+const taskEditOwner = document.getElementById('task-edit-owner');
+const taskEditOwnerField = document.getElementById('task-edit-owner-field');
+const taskEditNotes = document.getElementById('task-edit-notes');
+const taskEditBlockedBy = document.getElementById('task-edit-blocked-by');
+const taskCommentCount = document.getElementById('task-comment-count');
+const taskCommentList = document.getElementById('task-comment-list');
+const taskCommentForm = document.getElementById('task-comment-form');
+const taskEditSubmitButton = taskEditForm.querySelector('button[type="submit"]');
+const taskCommentSubmitButton = taskCommentForm.querySelector('button[type="submit"]');
+const taskCommentAuthor = document.getElementById('task-comment-author');
+const taskCommentBody = document.getElementById('task-comment-body');
+const taskDetailTimeMetrics = document.getElementById('task-detail-time-metrics');
+const taskDetailTimeSavingsPill = document.getElementById('task-detail-time-savings-pill');
+const taskDetailRunStatus = document.getElementById('task-detail-run-status');
+const taskDetailOutput = document.getElementById('task-detail-output');
+const taskDetailError = document.getElementById('task-detail-error');
+const taskRunHistoryCount = document.getElementById('task-run-history-count');
+const taskRunHistory = document.getElementById('task-run-history');
+const taskDetailActions = document.getElementById('task-detail-actions');
 const reassignDialog = document.getElementById('reassign-dialog');
 const reassignTaskTitle = document.getElementById('reassign-task-title');
 const reassignAgentSelect = document.getElementById('reassign-agent-select');
 const reassignConfirmButton = document.getElementById('reassign-confirm-button');
 const reassignCancelButton = document.getElementById('reassign-cancel-button');
+const splitTaskDialog = document.getElementById('split-task-dialog');
+const splitTaskTitle = document.getElementById('split-task-title');
+const splitTaskSummary = document.getElementById('split-task-summary');
+const splitTaskPlanList = document.getElementById('split-task-plan-list');
+const splitTaskConfirmButton = document.getElementById('split-task-confirm-button');
+const splitTaskCancelButton = document.getElementById('split-task-cancel-button');
 const cardTemplate = document.getElementById('task-card-template');
+const THEME_STORAGE_KEY = 'jarvis-theme';
+const themeToggleButton = document.getElementById('theme-toggle-button');
+const themeToggleLabel = document.getElementById('theme-toggle-label');
+const keywordIntentLabels = {
+  informational: 'Informational',
+  commercial: 'Commercial',
+  transactional: 'Transactional',
+  navigational: 'Navigational',
+  local: 'Local',
+};
+const keywordStatusLabels = {
+  idea: 'Idea',
+  researching: 'Researching',
+  targeting: 'Targeting',
+  drafting: 'Drafting',
+  published: 'Published',
+  paused: 'Paused',
+};
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -97,17 +237,81 @@ async function api(path, options = {}) {
   return data;
 }
 
+function getStoredTheme() {
+  try {
+    const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return theme === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function applyTheme(theme, persist = true) {
+  const resolved = theme === 'dark' ? 'dark' : 'light';
+  document.body.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+
+  if (themeToggleButton) {
+    themeToggleButton.checked = resolved === 'dark';
+    themeToggleButton.setAttribute('aria-checked', resolved === 'dark' ? 'true' : 'false');
+  }
+
+  if (themeToggleLabel) {
+    themeToggleLabel.textContent = resolved === 'dark' ? 'Dark mode' : 'Light mode';
+  }
+
+  if (persist) {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, resolved);
+    } catch {
+      // ignore storage failures
+    }
+  }
+}
+
+function initTheme() {
+  applyTheme(getStoredTheme(), false);
+}
+
+function toggleTheme() {
+  applyTheme(themeToggleButton?.checked ? 'dark' : 'light');
+}
+
+function parseHashRoute() {
+  const hash = window.location.hash.replace(/^#/, '').trim();
+  if (!hash) {
+    return { view: 'overview', projectId: null };
+  }
+
+  const [rawView, rawProjectId] = hash.split('/');
+  const view = viewMeta[rawView] ? rawView : 'overview';
+  return {
+    view,
+    projectId: view === 'tasks' ? rawProjectId || null : null,
+  };
+}
+
 function getCurrentView() {
-  const view = window.location.hash.replace('#', '') || 'overview';
-  return viewMeta[view] ? view : 'overview';
+  return parseHashRoute().view;
+}
+
+function getCurrentTaskBoardProject() {
+  const { view, projectId } = parseHashRoute();
+  if (view !== 'tasks' || !dashboard) {
+    return null;
+  }
+  return dashboard.projects.find((project) => project.id === projectId) || null;
 }
 
 function applyView() {
-  const view = getCurrentView();
+  const { view } = parseHashRoute();
   const meta = viewMeta[view];
+  const boardProject = getCurrentTaskBoardProject();
 
-  pageTitle.textContent = meta.title;
-  pageDescription.textContent = meta.description;
+  pageTitle.textContent = boardProject && view === 'tasks' ? `${boardProject.name} board` : meta.title;
+  pageDescription.textContent = boardProject && view === 'tasks'
+    ? `Project-scoped kanban and task intake for ${boardProject.name}.`
+    : meta.description;
 
   document.querySelectorAll('.page-view').forEach((section) => {
     section.classList.toggle('active', section.dataset.view === view);
@@ -116,33 +320,47 @@ function applyView() {
   document.querySelectorAll('[data-view-link]').forEach((button) => {
     button.classList.toggle('active', button.dataset.viewLink === view);
   });
+
+  if (view !== 'tasks') {
+    closeTaskDetail();
+  }
 }
 
 function populateFormOptions() {
   const agentSelect = document.getElementById('task-agent');
   const projectSelect = document.getElementById('task-owner');
+  const boardProject = getCurrentTaskBoardProject();
 
   const currentAgentValue = agentSelect.value;
-  const currentProjectValue = projectSelect.value;
+  const currentProjectValue = boardProject?.name || projectSelect.value;
 
   agentSelect.innerHTML = dashboard.agents
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
-      (agent) => `<option value="${agent.id}">${agent.name} (${skillLabels[agent.specialty] || agent.specialty})</option>`
+      (agent) => `<option value="${agent.id}">${escapeHtml(agent.name)} (${escapeHtml(skillLabels[agent.specialty] || agent.specialty)})</option>`
     )
     .join('');
 
-  projectSelect.innerHTML = dashboard.projects
-    .map((project) => `<option value="${project}">${project}</option>`)
-    .join('');
+  const projects = getSortedProjects();
+  const projectOptions = projects.length
+    ? ['<option value="">Select a project</option>', ...projects.map((project) => `<option value="${escapeHtml(getProjectName(project))}">${escapeHtml(getProjectName(project))}</option>`)]
+    : ['<option value="">No projects yet</option>'];
+  projectSelect.innerHTML = projectOptions.join('');
 
   if (currentAgentValue && dashboard.agents.some((agent) => agent.id === currentAgentValue)) {
     agentSelect.value = currentAgentValue;
   }
 
-  if (currentProjectValue && dashboard.projects.includes(currentProjectValue)) {
+  if (currentProjectValue && projects.some((project) => getProjectName(project) === currentProjectValue)) {
     projectSelect.value = currentProjectValue;
+  } else if (projects.length && !currentProjectValue) {
+    projectSelect.value = getProjectName(projects[0]);
+  }
+
+  projectSelect.disabled = Boolean(boardProject);
+  if (taskOwnerField) {
+    taskOwnerField.hidden = Boolean(boardProject);
   }
 }
 
@@ -151,11 +369,735 @@ function populateAgentSelectOptions(selectElement, selectedValue = '') {
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(
-      (agent) => `<option value="${agent.id}">${agent.name} (${skillLabels[agent.specialty] || agent.specialty})</option>`
+      (agent) => `<option value="${agent.id}">${escapeHtml(agent.name)} (${escapeHtml(skillLabels[agent.specialty] || agent.specialty)})</option>`
     )
     .join('');
 
   if (selectedValue && dashboard.agents.some((agent) => agent.id === selectedValue)) {
+    selectElement.value = selectedValue;
+  }
+}
+
+function buildAgentOptions(selectedValue = '') {
+  return dashboard.agents
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((agent) => `<option value="${agent.id}" ${agent.id === selectedValue ? 'selected' : ''}>${escapeHtml(agent.name)} (${escapeHtml(skillLabels[agent.specialty] || agent.specialty)})</option>`)
+    .join('');
+}
+
+function getProjectName(project) {
+  return typeof project === 'string' ? project : project?.name || '';
+}
+
+function getProjectRepos(project) {
+  if (typeof project === 'string') {
+    return [];
+  }
+  const repos = Array.isArray(project?.repos) ? project.repos : [];
+  if (repos.length) {
+    return repos.filter(Boolean);
+  }
+  return project?.repoUrl
+    ? [
+        {
+          id: 'repo-legacy',
+          label: 'Primary repo',
+          role: 'app',
+          url: project.repoUrl,
+          primary: true,
+        },
+      ]
+    : [];
+}
+
+function getProjectPrimaryRepo(project) {
+  const repos = getProjectRepos(project);
+  return repos.find((repo) => repo.primary) || repos[0] || null;
+}
+
+function getProjectRepoUrl(project) {
+  return getProjectPrimaryRepo(project)?.url || '';
+}
+
+function getProjectReviewServices(project) {
+  return typeof project === 'string' ? [] : Array.isArray(project?.reviewServices) ? project.reviewServices.filter(Boolean) : [];
+}
+
+function getProjectStats(project) {
+  return typeof project === 'string' ? null : project?.stats || null;
+}
+
+function getProjectKeepDocsUpToDate(project) {
+  return typeof project === 'string' ? false : Boolean(project?.keepDocumentationUpToDate);
+}
+
+function getProjectByName(name) {
+  return (dashboard.projects || []).find((project) => getProjectName(project) === name) || null;
+}
+
+function getProjectById(projectId) {
+  return (dashboard.projects || []).find((project) => project.id === projectId) || null;
+}
+
+function getProjectForTask(task) {
+  return getProjectByName(task?.owner || '');
+}
+
+function getTasksForProject(project) {
+  const projectName = typeof project === 'string' ? project : project?.name;
+  return dashboard.tasks.filter((task) => task.owner === projectName);
+}
+
+function getKeywordProjectName(keyword) {
+  return keyword?.project?.name || getProjectById(keyword?.projectId)?.name || 'Unlinked project';
+}
+
+function getKeywordStatusClass(status) {
+  if (status === 'published') return 'success';
+  if (status === 'paused') return 'warning';
+  return 'neutral';
+}
+
+function getValidKeywordProjectId(projectId = '') {
+  const projects = getSortedProjects();
+  if (!projects.length) {
+    return '';
+  }
+
+  if (projectId && projects.some((project) => project.id === projectId)) {
+    return projectId;
+  }
+
+  return projects[0].id;
+}
+
+function getGoogleSearchConsoleConnection() {
+  return dashboard?.integrations?.googleSearchConsole || null;
+}
+
+function getGoogleSearchConsoleStatusTone(status) {
+  switch (status) {
+    case 'connected':
+      return 'success';
+    case 'expired':
+    case 'scope-mismatch':
+    case 'authorization-failed':
+      return 'warning';
+    default:
+      return 'neutral';
+  }
+}
+
+function getGoogleSearchConsoleStatusLabel(status) {
+  switch (status) {
+    case 'connected':
+      return 'Connected';
+    case 'unconfigured':
+      return 'Unconfigured';
+    case 'disconnected':
+      return 'Disconnected';
+    case 'expired':
+      return 'Expired';
+    case 'scope-mismatch':
+      return 'Scope mismatch';
+    case 'authorization-failed':
+      return 'Auth failed';
+    default:
+      return 'Unknown';
+  }
+}
+
+function renderKeywordConnection() {
+  const connection = getGoogleSearchConsoleConnection();
+  const status = connection?.status || 'unknown';
+  const tone = getGoogleSearchConsoleStatusTone(status);
+  const connected = status === 'connected';
+  const hasStoredConnection = ['connected', 'expired', 'scope-mismatch'].includes(status);
+  const meta = [
+    connection?.redirectUri ? `Redirect ${connection.redirectUri}` : null,
+    connection?.requiredScopes?.length ? `Scope ${connection.requiredScopes.join(', ')}` : null,
+    connection?.grantedScopes?.length ? `Granted ${connection.grantedScopes.join(', ')}` : null,
+    connection?.expiresAt ? `Expires ${formatDateTime(connection.expiresAt)}` : null,
+    connection?.updatedAt ? `Updated ${relativeTime(connection.updatedAt)}` : null,
+    connection?.lastError?.message ? `Last error: ${connection.lastError.message}` : null,
+  ].filter(Boolean);
+
+  keywordConnectionStatusPill.textContent = getGoogleSearchConsoleStatusLabel(status);
+  keywordConnectionStatusPill.className = `pill ${tone}`;
+  keywordConnectionMessage.textContent = connection?.message || 'Connection status will appear here.';
+  keywordConnectionMeta.innerHTML = meta.length
+    ? meta.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')
+    : '<span class="tag">Only the readonly Search Console scope is requested.</span>';
+
+  keywordConnectButton.textContent = connected ? 'Reconnect Google' : 'Connect Google';
+  keywordDisconnectButton.hidden = !hasStoredConnection;
+}
+
+function buildKeywordPayload(formData) {
+  return {
+    projectId: getValidKeywordProjectId(String(formData.get('projectId') || '')),
+    market: formData.get('market'),
+    language: formData.get('language'),
+    cluster: formData.get('cluster'),
+    term: formData.get('term'),
+    intent: formData.get('intent'),
+    status: formData.get('status'),
+    priority: formData.get('priority'),
+    opportunityScore: formData.get('opportunityScore'),
+    source: formData.get('source'),
+    targetPage: formData.get('targetPage'),
+    notes: formData.get('notes'),
+  };
+}
+
+function populateKeywordProjectSelect(selectedValue = '') {
+  const projects = getSortedProjects();
+  keywordProjectSelect.innerHTML = projects.length
+    ? projects.map((project) => `<option value="${project.id}">${escapeHtml(getProjectName(project))}</option>`).join('')
+    : '<option value="">Create a project first</option>';
+
+  if (selectedValue && projects.some((project) => project.id === selectedValue)) {
+    keywordProjectSelect.value = selectedValue;
+  } else if (projects[0]) {
+    keywordProjectSelect.value = projects[0].id;
+  }
+
+  const disabled = !projects.length;
+  [
+    keywordProjectSelect,
+    keywordMarketInput,
+    keywordLanguageInput,
+    keywordClusterInput,
+    keywordTermInput,
+    keywordIntentSelect,
+    keywordStatusSelect,
+    keywordPrioritySelect,
+    keywordScoreInput,
+    keywordSourceInput,
+    keywordTargetPageInput,
+    keywordNotesInput,
+    keywordSubmitButton,
+    keywordSeedButton,
+  ].forEach((element) => {
+    element.disabled = disabled;
+  });
+}
+
+function populateKeywordFilters() {
+  const projects = getSortedProjects();
+  const currentProjectId = keywordProjectFilter.value;
+  const currentStatus = keywordStatusFilter.value;
+
+  keywordProjectFilter.innerHTML = ['<option value="">All projects</option>', ...projects.map((project) => `<option value="${project.id}">${escapeHtml(getProjectName(project))}</option>`)].join('');
+  keywordStatusFilter.innerHTML = [
+    '<option value="">All statuses</option>',
+    ...Object.entries(keywordStatusLabels).map(([value, label]) => `<option value="${value}">${label}</option>`),
+  ].join('');
+
+  if (currentProjectId && projects.some((project) => project.id === currentProjectId)) {
+    keywordProjectFilter.value = currentProjectId;
+  }
+  if (currentStatus && keywordStatusLabels[currentStatus]) {
+    keywordStatusFilter.value = currentStatus;
+  }
+}
+
+function syncKeywordFormMode() {
+  const editing = Boolean(selectedKeywordId);
+  keywordFormModePill.textContent = editing ? 'Edit' : 'Create';
+  keywordSubmitButton.textContent = editing ? 'Save keyword' : 'Create keyword';
+  keywordCancelButton.hidden = !editing;
+}
+
+function clearKeywordForm(options = {}) {
+  const { preserveProjectSelection = true } = options;
+  const selectedProjectValue = preserveProjectSelection ? keywordProjectSelect.value : '';
+  selectedKeywordId = null;
+  keywordForm.reset();
+  populateKeywordProjectSelect(selectedProjectValue);
+  keywordMarketInput.value = 'se';
+  keywordLanguageInput.value = 'sv';
+  keywordIntentSelect.value = 'informational';
+  keywordStatusSelect.value = 'idea';
+  keywordPrioritySelect.value = 'medium';
+  keywordScoreInput.value = '';
+  syncKeywordFormMode();
+}
+
+function openKeywordEdit(keywordId) {
+  const keyword = (dashboard.keywords || []).find((item) => item.id === keywordId);
+  if (!keyword) {
+    return;
+  }
+
+  selectedKeywordId = keyword.id;
+  populateKeywordProjectSelect(keyword.projectId || '');
+  keywordProjectSelect.value = keyword.projectId || '';
+  keywordMarketInput.value = keyword.market || '';
+  keywordLanguageInput.value = keyword.language || '';
+  keywordClusterInput.value = keyword.cluster || '';
+  keywordTermInput.value = keyword.term || '';
+  keywordIntentSelect.value = keyword.intent || 'informational';
+  keywordStatusSelect.value = keyword.status || 'idea';
+  keywordPrioritySelect.value = keyword.priority || 'medium';
+  keywordScoreInput.value = Number(keyword.opportunityScore || 0) > 0 ? String(keyword.opportunityScore) : '';
+  keywordSourceInput.value = keyword.source || '';
+  keywordTargetPageInput.value = keyword.targetPage || '';
+  keywordNotesInput.value = keyword.notes || '';
+  syncKeywordFormMode();
+  keywordForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  keywordTermInput.focus();
+}
+
+function getFilteredKeywords() {
+  const projectId = keywordProjectFilter.value;
+  const status = keywordStatusFilter.value;
+  const search = keywordSearchFilter.value.trim().toLowerCase();
+
+  return (dashboard.keywords || []).filter((keyword) => {
+    if (projectId && keyword.projectId !== projectId) {
+      return false;
+    }
+    if (status && keyword.status !== status) {
+      return false;
+    }
+    if (!search) {
+      return true;
+    }
+
+    const haystack = [
+      keyword.term,
+      keyword.cluster,
+      keyword.source,
+      keyword.notes,
+      keyword.targetPage,
+      getKeywordProjectName(keyword),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(search);
+  });
+}
+
+function buildKeywordSampleSet(projectId) {
+  return [
+    {
+      projectId,
+      market: 'se',
+      language: 'sv',
+      cluster: 'ai automation',
+      term: 'ai agent konsult',
+      intent: 'commercial',
+      status: 'researching',
+      priority: 'high',
+      opportunityScore: 72,
+      source: 'manual seed',
+      targetPage: '/tjanster/ai-agenter',
+      notes: 'Commercial service intent for the Swedish consulting offer.',
+    },
+    {
+      projectId,
+      market: 'se',
+      language: 'sv',
+      cluster: 'business automation',
+      term: 'automatisera administration',
+      intent: 'informational',
+      status: 'idea',
+      priority: 'medium',
+      opportunityScore: 58,
+      source: 'manual seed',
+      targetPage: '/blog/automatisera-administration',
+      notes: 'Useful top-of-funnel educational content for operations pain points.',
+    },
+    {
+      projectId,
+      market: 'se',
+      language: 'sv',
+      cluster: 'local seo',
+      term: 'bokforingsbyra stockholm',
+      intent: 'local',
+      status: 'targeting',
+      priority: 'high',
+      opportunityScore: 66,
+      source: 'manual seed',
+      targetPage: '/stockholm/bokforing',
+      notes: 'Local landing page candidate with direct conversion intent.',
+    },
+  ];
+}
+
+function buildKeywordCard(keyword) {
+  const projectName = getKeywordProjectName(keyword);
+  const score = Number(keyword.opportunityScore || 0);
+  const detailTags = [
+    keyword.market ? keyword.market.toUpperCase() : null,
+    keyword.language ? keyword.language.toUpperCase() : null,
+    keyword.cluster || null,
+    keyword.source || null,
+    keyword.targetPage || null,
+    score > 0 ? `Score ${score}` : null,
+    `Updated ${relativeTime(keyword.updatedAt)}`,
+  ].filter(Boolean);
+
+  return `
+    <article class="keyword-card">
+      <div class="keyword-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(projectName)}</p>
+          <h3>${escapeHtml(keyword.term)}</h3>
+        </div>
+        <div class="keyword-card-pills">
+          <span class="pill ${getKeywordStatusClass(keyword.status)}">${escapeHtml(keywordStatusLabels[keyword.status] || keyword.status)}</span>
+          <span class="task-priority-label ${priorityClass(keyword.priority)}">${escapeHtml(keyword.priority)}</span>
+        </div>
+      </div>
+      <div class="task-meta keyword-meta">
+        <span class="tag">${escapeHtml(keywordIntentLabels[keyword.intent] || keyword.intent)}</span>
+        ${detailTags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
+      </div>
+      <p class="keyword-card-copy">${escapeHtml(keyword.notes || 'No notes captured yet. Add why this term matters, content angle, or validation notes.')}</p>
+      <div class="task-actions">
+        <button type="button" class="button primary" data-keyword-action="edit" data-keyword-id="${keyword.id}">Edit</button>
+        <button type="button" class="button ghost danger" data-keyword-action="delete" data-keyword-id="${keyword.id}">Delete</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderKeywords() {
+  const projects = getSortedProjects();
+  if (selectedKeywordId && !(dashboard.keywords || []).some((keyword) => keyword.id === selectedKeywordId)) {
+    clearKeywordForm();
+  }
+  const allKeywords = dashboard.keywords || [];
+  const filteredKeywords = getFilteredKeywords();
+  const openCount = allKeywords.filter((keyword) => ['idea', 'researching', 'targeting'].includes(keyword.status)).length;
+  const projectScope = keywordProjectFilter.value ? getProjectById(keywordProjectFilter.value)?.name || 'selected project' : 'all projects';
+  const statusScope = keywordStatusFilter.value ? keywordStatusLabels[keywordStatusFilter.value] || keywordStatusFilter.value : 'all statuses';
+
+  populateKeywordProjectSelect(keywordProjectSelect.value);
+  populateKeywordFilters();
+  syncKeywordFormMode();
+  renderKeywordConnection();
+
+  keywordCountPill.textContent = `${filteredKeywords.length} keyword${filteredKeywords.length === 1 ? '' : 's'}`;
+
+  if (!projects.length) {
+    keywordSummary.textContent = 'Create a project first, then capture keywords against that project.';
+    keywordList.innerHTML = '<div class="empty-state">No projects exist yet, so keyword capture is disabled until at least one project is available.</div>';
+    return;
+  }
+
+  keywordSummary.textContent = allKeywords.length
+    ? `${filteredKeywords.length} shown for ${projectScope} across ${statusScope}. ${openCount} keyword opportunity${openCount === 1 ? '' : 'ies'} still active.`
+    : 'No keywords saved yet. Add one manually or load the sample set for a first clickable pass.';
+
+  if (!allKeywords.length) {
+    keywordList.innerHTML = '<div class="empty-state">No keywords yet. Start with one target term, or use “Load sample set” to see the full workflow immediately.</div>';
+    return;
+  }
+
+  if (!filteredKeywords.length) {
+    keywordList.innerHTML = '<div class="empty-state">No keywords match the current filters. Clear the filters or search for a different term.</div>';
+    return;
+  }
+
+  keywordList.innerHTML = filteredKeywords.map((keyword) => buildKeywordCard(keyword)).join('');
+}
+
+function getReviewServiceStatusPriority(status) {
+  const rank = {
+    failed: 0,
+    starting: 1,
+    ready: 2,
+    stopping: 3,
+    stopped: 4,
+    idle: 5,
+  };
+  return rank[String(status || '').trim().toLowerCase()] ?? 9;
+}
+
+function getReviewServiceSelectionPriority(status) {
+  const rank = {
+    ready: 0,
+    starting: 1,
+    failed: 2,
+    stopping: 3,
+    stopped: 4,
+    idle: 5,
+  };
+  return rank[String(status || '').trim().toLowerCase()] ?? 9;
+}
+
+function getProjectReviewServiceOverview(project) {
+  const configuredServices = getProjectReviewServices(project);
+  const activeTasks = getTasksForProject(project).filter((task) => task.reviewEnvironment);
+  const activeByServiceKey = new Map();
+
+  activeTasks.forEach((task) => {
+    const reviewEnvironment = task.reviewEnvironment || null;
+    (reviewEnvironment?.services || []).forEach((service) => {
+      const key = service.id || `${service.name || service.repoRole || 'service'}:${service.repoRole || ''}`;
+      const candidate = {
+        key,
+        name: service.name || service.repoRole || 'Service',
+        status: service.status || reviewEnvironment?.status || 'idle',
+        branchName: service.branchName || null,
+        taskTitle: task.title,
+        taskId: task.id,
+        localUrl: service.localUrl || '',
+        message: service.error || service.startupIssue || reviewEnvironment?.message || '',
+        repoRole: service.repoRole || '',
+        updatedAt: Number(reviewEnvironment?.updatedAt || 0) || 0,
+      };
+
+      const current = activeByServiceKey.get(key);
+      if (!current) {
+        activeByServiceKey.set(key, candidate);
+        return;
+      }
+
+      const candidatePriority = getReviewServiceSelectionPriority(candidate.status);
+      const currentPriority = getReviewServiceSelectionPriority(current.status);
+      if (candidatePriority < currentPriority || (candidatePriority === currentPriority && candidate.updatedAt >= current.updatedAt)) {
+        activeByServiceKey.set(key, candidate);
+      }
+    });
+  });
+
+  const seen = new Set();
+  const items = [];
+
+  configuredServices.forEach((service) => {
+    const key = service.id || `${service.name || service.repoRole || 'service'}:${service.repoRole || ''}`;
+    seen.add(key);
+    const match = activeByServiceKey.get(key) || null;
+    if (match) {
+      items.push(match);
+      return;
+    }
+    items.push({
+      key,
+      name: service.name || service.repoRole || 'Service',
+      status: 'idle',
+      branchName: null,
+      taskTitle: '',
+      taskId: '',
+      localUrl: service.localUrl || '',
+      message: 'Idle, waiting for Start service.',
+      repoRole: service.repoRole || '',
+    });
+  });
+
+  activeByServiceKey.forEach((match, key) => {
+    if (!seen.has(key)) {
+      items.push(match);
+    }
+  });
+
+  return items.sort((a, b) => getReviewServiceStatusPriority(a.status) - getReviewServiceStatusPriority(b.status)
+    || a.name.localeCompare(b.name)
+    || a.taskTitle.localeCompare(b.taskTitle));
+}
+
+function buildProjectReviewServiceCards(project) {
+  const services = getProjectReviewServiceOverview(project);
+  if (!services.length) {
+    return '';
+  }
+
+  return services
+    .map((service) => `
+      <article class="service-status-card service-status-${escapeHtml((service.status || 'idle').toLowerCase())}">
+        <div class="service-status-header">
+          <strong>${escapeHtml(service.name || 'Service')}</strong>
+          <span class="pill neutral">${escapeHtml(service.status || 'idle')}</span>
+        </div>
+        <p class="service-status-detail">${escapeHtml(service.message || 'No service activity yet.')}</p>
+        <div class="task-meta service-status-meta">
+          ${service.repoRole ? `<span class="tag">${escapeHtml(service.repoRole)}</span>` : ''}
+          ${service.branchName ? `<span class="tag">Branch: ${escapeHtml(service.branchName)}</span>` : '<span class="tag">Branch pending</span>'}
+          ${service.taskId ? `<span class="tag">${escapeHtml(service.taskId)}</span>` : ''}
+          ${service.taskTitle ? `<span class="tag">Task: ${escapeHtml(service.taskTitle)}</span>` : ''}
+          ${service.localUrl ? (String(service.status || '').toLowerCase() === 'ready'
+            ? `<a class="tag tag-link" href="${escapeHtml(service.localUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(service.localUrl)}</a>`
+            : `<span class="tag">${escapeHtml(service.localUrl)}</span>`) : ''}
+        </div>
+      </article>
+    `)
+    .join('');
+}
+
+function getReviewIssueSummary(task) {
+  const reviewEnvironment = task?.reviewEnvironment || null;
+  if (!reviewEnvironment) {
+    return '';
+  }
+
+  const issueService = (reviewEnvironment.services || []).find((service) => service?.error || service?.startupIssue) || null;
+  return issueService?.error || issueService?.startupIssue || (reviewEnvironment.status === 'failed' ? reviewEnvironment.message || '' : '');
+}
+
+function hasRepairableReviewIssue(task) {
+  return Boolean(getReviewIssueSummary(task));
+}
+
+function getTaskBoardTasks() {
+  const project = getCurrentTaskBoardProject();
+  return project ? getTasksForProject(project) : [];
+}
+
+function getTaskLaneOrder(task) {
+  return Number.isFinite(Number(task?.laneOrder)) ? Number(task.laneOrder) : null;
+}
+
+function compareTasksForLane(a, b, laneId = a?.lane || b?.lane || '') {
+  if (laneId === 'done') {
+    return getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority];
+  }
+
+  const aLaneOrder = getTaskLaneOrder(a);
+  const bLaneOrder = getTaskLaneOrder(b);
+
+  if (aLaneOrder !== null && bLaneOrder !== null && aLaneOrder !== bLaneOrder) {
+    return aLaneOrder - bLaneOrder;
+  }
+
+  if (aLaneOrder !== null && bLaneOrder === null) {
+    return -1;
+  }
+
+  if (aLaneOrder === null && bLaneOrder !== null) {
+    return 1;
+  }
+
+  return priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0);
+}
+
+function sortTasksForLane(tasks, laneId) {
+  return [...(tasks || [])].sort((a, b) => compareTasksForLane(a, b, laneId));
+}
+
+function getTaskById(taskId) {
+  return (dashboard.tasks || []).find((task) => task.id === taskId) || null;
+}
+
+function getDependencyCandidates(task, { includeDone = false, restrictToProject = true, excludeIds = [] } = {}) {
+  const excluded = new Set([task?.id, ...(excludeIds || [])].filter(Boolean));
+  return (dashboard.tasks || [])
+    .filter((candidate) => candidate && !excluded.has(candidate.id))
+    .filter((candidate) => !restrictToProject || candidate.owner === task?.owner)
+    .filter((candidate) => includeDone || candidate.lane !== 'done')
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function populateBlockedByOptions(selectElement, task, selectedIds = []) {
+  const selected = new Set((selectedIds || []).filter(Boolean));
+  const options = getDependencyCandidates(task, { includeDone: true }).map(
+    (candidate) => `<option value="${candidate.id}" ${selected.has(candidate.id) ? 'selected' : ''}>${escapeHtml(candidate.title)} (${escapeHtml(candidate.lane)})</option>`
+  );
+  selectElement.innerHTML = options.length ? options.join('') : '<option value="" disabled>No eligible blocker tasks in this project</option>';
+}
+
+function getSelectedValues(selectElement) {
+  return [...(selectElement?.selectedOptions || [])].map((option) => option.value).filter(Boolean);
+}
+
+function getBlockingTasks(task) {
+  return (Array.isArray(task?.blockedBy) ? task.blockedBy : [])
+    .map((taskId) => getTaskById(taskId))
+    .filter((candidate) => candidate && candidate.lane !== 'done');
+}
+
+function isTaskBlocked(task) {
+  return getBlockingTasks(task).length > 0;
+}
+
+function isSplitParentTask(task) {
+  return Array.isArray(task?.splitChildren) && task.splitChildren.length > 0;
+}
+
+function getSplitChildTasks(task) {
+  return (Array.isArray(task?.splitChildren) ? task.splitChildren : [])
+    .map((taskId) => getTaskById(taskId))
+    .filter(Boolean);
+}
+
+function getSplitProgress(task) {
+  const childTasks = getSplitChildTasks(task);
+  const totalCount = childTasks.length;
+  const completedCount = childTasks.filter((childTask) => childTask.lane === 'done').length;
+  return { totalCount, completedCount };
+}
+
+function formatSplitProgress(task) {
+  const { totalCount, completedCount } = getSplitProgress(task);
+  if (!totalCount) {
+    return '';
+  }
+  return `${completedCount}/${totalCount} subtasks completed`;
+}
+
+function formatBlockingSummary(task) {
+  const blockers = getBlockingTasks(task);
+  if (!blockers.length) {
+    return '';
+  }
+  return `Blocked by ${blockers.map((item) => item.title).join(', ')}`;
+}
+
+function getTaskBoardApprovals() {
+  return sortTasksForLane(getTaskBoardTasks().filter((task) => task.lane === 'approval'), 'approval');
+}
+
+function isTaskVisibleInCurrentBoard(task) {
+  const boardProject = getCurrentTaskBoardProject();
+  if (getCurrentView() !== 'tasks') {
+    return true;
+  }
+  if (!boardProject) {
+    return false;
+  }
+  return task?.owner === boardProject.name;
+}
+
+function getProjectGitWorkflow(project) {
+  return typeof project === 'string' ? 'feature-branches' : project?.gitWorkflow || 'feature-branches';
+}
+
+function getProjectWorkflowLabel(project) {
+  const workflow = getProjectGitWorkflow(project);
+  if (workflow === 'direct-main') return 'Update main directly';
+  if (workflow === 'agent-branch') return 'Dedicated agent branch';
+  return 'Use feature branches';
+}
+
+function getSortedProjects() {
+  return [...(dashboard?.projects || [])].filter(Boolean).sort((a, b) => getProjectName(a).localeCompare(getProjectName(b)));
+}
+
+function populateProjectSelectOptions(selectElement, selectedValue = '', { allowFallback = true, includePlaceholder = false } = {}) {
+  const projects = getSortedProjects();
+  const options = [];
+
+  if (includePlaceholder) {
+    options.push('<option value="">Select a project</option>');
+  }
+
+  if (projects.length) {
+    options.push(...projects.map((project) => `<option value="${escapeHtml(getProjectName(project))}">${escapeHtml(getProjectName(project))}</option>`));
+  } else if (!includePlaceholder) {
+    options.push('<option value="">No projects yet</option>');
+  }
+
+  if (allowFallback && selectedValue && !projects.some((project) => getProjectName(project) === selectedValue)) {
+    options.push(`<option value="${escapeHtml(selectedValue)}">${escapeHtml(selectedValue)}</option>`);
+  }
+
+  selectElement.innerHTML = options.join('');
+
+  if (selectedValue) {
     selectElement.value = selectedValue;
   }
 }
@@ -181,6 +1123,15 @@ function priorityClass(priority) {
 function truncate(text, max = 170) {
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max).trim()}…` : text;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function cleanRuntimeNote(text) {
@@ -211,8 +1162,8 @@ function getTaskCompletionTime(task) {
   return task.completedAt || task.updatedAt || task.lastRun?.finishedAt || task.createdAt || 0;
 }
 
-function getDoneTasks() {
-  return dashboard.tasks
+function getDoneTasks(tasks = dashboard.tasks) {
+  return tasks
     .filter((task) => task.lane === 'done')
     .sort((a, b) => getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority]);
 }
@@ -244,6 +1195,252 @@ function getDoneColumnMessage(doneTasks, visibleDoneTasks) {
   return `Showing the latest ${visibleDoneTasks.length} completed tasks.`;
 }
 
+function formatDateTime(timestamp) {
+  if (!timestamp) return 'n/a';
+  return new Date(timestamp).toLocaleString();
+}
+
+function formatDuration(durationMs) {
+  if (durationMs === null || durationMs === undefined || Number.isNaN(Number(durationMs))) return 'n/a';
+  const seconds = Math.max(0, Math.round(Number(durationMs) / 1000));
+  if (!seconds) return '0m';
+  if (seconds < 60) return `${seconds}s`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  if (hours) {
+    if (!minutes) return `${hours}h`;
+    return `${hours}h ${minutes}m`;
+  }
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function formatSignedDuration(durationMs) {
+  if (!durationMs) return '0m';
+  const sign = durationMs < 0 ? '-' : '';
+  return `${sign}${formatDuration(Math.abs(durationMs))}`;
+}
+
+function getTaskTimeSummary(task) {
+  return task?.timeSummary || null;
+}
+
+function buildTaskTimeMetaLine(task) {
+  const summary = getTaskTimeSummary(task);
+  if (!summary) return '';
+  return `Agent ${formatDuration(summary.actualAgentMs)} · Human est. ${formatDuration(summary.estimatedHumanMs)}`;
+}
+
+function summarizeProjectTaskSet(tasks = []) {
+  const list = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
+  const timedTasks = list
+    .map((task) => ({ task, summary: getTaskTimeSummary(task) }))
+    .filter((item) => item.summary);
+
+  const completedTaskCount = list.filter((task) => task.lane === 'done').length;
+  const activeTaskCount = list.filter((task) => ['inprogress', 'review'].includes(task.lane)).length;
+  const blockedTaskCount = list.filter((task) => task.lane !== 'done' && isTaskBlocked(task)).length;
+  const totalRunCount = timedTasks.reduce((sum, item) => sum + Number(item.summary.totalRunCount || 0), 0);
+  const agentTimeMs = timedTasks.reduce((sum, item) => sum + Number(item.summary.actualAgentMs || 0), 0);
+  const humanTimeMs = timedTasks.reduce((sum, item) => sum + Number(item.summary.estimatedHumanMs || 0), 0);
+  const timeSavedMs = timedTasks.reduce((sum, item) => sum + Number(item.summary.estimatedSavedMs || 0), 0);
+
+  return {
+    taskCount: list.length,
+    completedTaskCount,
+    trackedCompletedTaskCount: timedTasks.filter((item) => item.task.lane === 'done').length,
+    trackedTaskCount: timedTasks.length,
+    activeTaskCount,
+    blockedTaskCount,
+    totalRunCount,
+    agentTimeMs,
+    humanTimeMs,
+    timeSavedMs,
+    averageAgentTimeMs: timedTasks.length ? Math.round(agentTimeMs / timedTasks.length) : 0,
+    averageHumanTimeMs: timedTasks.length ? Math.round(humanTimeMs / timedTasks.length) : 0,
+    averageTimeSavedMs: timedTasks.length ? Math.round(timeSavedMs / timedTasks.length) : 0,
+    automationMultiplier: agentTimeMs > 0 ? humanTimeMs / agentTimeMs : null,
+  };
+}
+
+function getVisibleTaskBoardStats(project) {
+  const boardTasks = getTasksForProject(project);
+  const doneTasks = getDoneTasks(boardTasks);
+  const visibleDoneTasks = getVisibleDoneTasks(doneTasks);
+  const visibleDoneIds = new Set(visibleDoneTasks.map((task) => task.id));
+  const visibleTasks = boardTasks.filter((task) => task.lane !== 'done' || visibleDoneIds.has(task.id));
+  return summarizeProjectTaskSet(visibleTasks);
+}
+
+function buildProjectStatsCards(project, options = {}) {
+  const stats = options.primaryStats || getProjectStats(project);
+  const lifetimeStats = options.lifetimeStats || null;
+  const primaryScopeLabel = options.primaryScopeLabel || (lifetimeStats ? 'Current board' : 'Lifetime');
+  if (!stats) {
+    return '<div class="empty-state">No project stats yet.</div>';
+  }
+
+  const sameAsLifetime = (primaryValue, lifetimeValue) => lifetimeStats && Number(primaryValue || 0) === Number(lifetimeValue || 0);
+
+  const cards = [
+    {
+      label: 'Completed',
+      value: stats.completedTaskCount,
+      detail: lifetimeStats
+        ? `${primaryScopeLabel}: ${stats.completedTaskCount} completed visible now`
+        : `Lifetime: ${stats.taskCount} total task${stats.taskCount === 1 ? '' : 's'}`,
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.completedTaskCount, lifetimeStats.completedTaskCount)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${lifetimeStats.completedTaskCount} completed`
+        : null,
+    },
+    {
+      label: 'Agent time',
+      value: formatDuration(stats.agentTimeMs),
+      detail: lifetimeStats
+        ? `${primaryScopeLabel}: ${stats.totalRunCount} visible run${stats.totalRunCount === 1 ? '' : 's'}`
+        : `Lifetime: ${stats.totalRunCount} total run${stats.totalRunCount === 1 ? '' : 's'}`,
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.agentTimeMs, lifetimeStats.agentTimeMs)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${formatDuration(lifetimeStats.agentTimeMs)}`
+        : null,
+    },
+    {
+      label: 'Human estimate',
+      value: formatDuration(stats.humanTimeMs),
+      detail: lifetimeStats
+        ? `${primaryScopeLabel}: ${stats.trackedTaskCount} visible task${stats.trackedTaskCount === 1 ? '' : 's'} with timing`
+        : `Lifetime: ${stats.trackedCompletedTaskCount} completed task${stats.trackedCompletedTaskCount === 1 ? '' : 's'} with timing`,
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.humanTimeMs, lifetimeStats.humanTimeMs)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${formatDuration(lifetimeStats.humanTimeMs)}`
+        : null,
+    },
+    {
+      label: 'Time saved',
+      value: formatSignedDuration(stats.timeSavedMs),
+      detail: stats.automationMultiplier ? `${stats.automationMultiplier.toFixed(1)}x faster` : 'Waiting for completed work',
+      secondary: lifetimeStats
+        ? sameAsLifetime(stats.timeSavedMs, lifetimeStats.timeSavedMs)
+          ? 'Lifetime: same as current visible board'
+          : `Lifetime: ${formatSignedDuration(lifetimeStats.timeSavedMs)}`
+        : null,
+    },
+    {
+      label: 'In flight',
+      value: stats.activeTaskCount,
+      detail: `${stats.blockedTaskCount} blocked`,
+      secondary: lifetimeStats ? `Lifetime runs: ${lifetimeStats.totalRunCount}` : null,
+    },
+  ];
+
+  return cards
+    .map(
+      (card) => `
+        <article class="project-stat-card">
+          <p class="project-stat-label">${escapeHtml(card.label)}</p>
+          <div class="project-stat-value">${escapeHtml(String(card.value))}</div>
+          <p class="project-stat-detail">${escapeHtml(card.detail)}</p>
+          ${card.secondary ? `<p class="project-stat-secondary">${escapeHtml(card.secondary)}</p>` : ''}
+        </article>
+      `
+    )
+    .join('');
+}
+
+function getStatusClass(status) {
+  return ['succeeded', 'success', 'done', 'completed'].includes(status)
+    ? 'success'
+    : ['failed', 'timed_out', 'cancelled', 'lost'].includes(status)
+      ? 'warning'
+      : 'neutral';
+}
+
+function buildRunCard(run, { compact = false } = {}) {
+  const summary = truncate(run.summaryText || run.outputText || run.errorText || '', compact ? 140 : 260);
+  const details = [
+    run.agentName || run.agentId,
+    run.model || 'model pending',
+    run.usage?.total ? `${run.usage.total.toLocaleString()} tokens` : 'usage pending',
+    run.durationMs ? formatDuration(run.durationMs) : run.status === 'running' ? 'in progress' : 'duration n/a',
+  ];
+
+  return `
+    <article class="history-card">
+      <div class="history-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(formatDateTime(run.startedAt))}</p>
+          <h3>${escapeHtml(run.taskTitle)}</h3>
+        </div>
+        <span class="pill ${getStatusClass(run.status)}">${escapeHtml(run.status)}</span>
+      </div>
+      <div class="task-meta">
+        <span class="tag">${escapeHtml(run.owner || 'No stream')}</span>
+        <span class="tag">${escapeHtml(skillLabels[run.skill] || run.skill || 'Unknown skill')}</span>
+        ${details.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')}
+      </div>
+      ${summary ? `<p class="task-run-note">${escapeHtml(summary)}</p>` : ''}
+      ${run.failureDetails || run.errorText ? `<p class="task-run-note error-note">${escapeHtml(truncate(run.failureDetails || run.errorText, compact ? 180 : 320))}</p>` : ''}
+    </article>
+  `;
+}
+
+function buildSystemTaskCard(task) {
+  const summary = truncate(task.summary || '', 320);
+  const details = [
+    task.runtime || 'unknown runtime',
+    task.agentId || 'agent n/a',
+    task.sessionKey || 'session n/a',
+    task.runId || 'run id n/a',
+  ];
+
+  return `
+    <article class="history-card">
+      <div class="history-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(formatDateTime(task.updatedAt || task.startedAt || task.createdAt))}</p>
+          <h3>${escapeHtml(task.label)}</h3>
+        </div>
+        <span class="pill ${getStatusClass(task.status)}">${escapeHtml(task.status)}</span>
+      </div>
+      <div class="task-meta">
+        ${details.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')}
+      </div>
+      ${summary ? `<p class="task-run-note">${escapeHtml(summary)}</p>` : ''}
+    </article>
+  `;
+}
+
+function buildSystemSessionCard(session) {
+  const detailTags = [
+    session.agentId || 'agent n/a',
+    session.kind || 'kind n/a',
+    session.model || 'model unknown',
+    `${(session.totalTokens || 0).toLocaleString()} tokens`,
+    session.thinkingLevel ? `thinking ${session.thinkingLevel}` : null,
+    session.systemSent ? 'system-sent' : null,
+    session.abortedLastRun ? 'last run aborted' : null,
+  ].filter(Boolean);
+
+  return `
+    <article class="history-card">
+      <div class="history-card-header">
+        <div>
+          <p class="eyebrow">${escapeHtml(formatDateTime(session.updatedAt))}</p>
+          <h3>${escapeHtml(session.key || session.sessionId || 'Session')}</h3>
+        </div>
+        <span class="pill neutral">session</span>
+      </div>
+      <div class="task-meta">
+        ${detailTags.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')}
+      </div>
+    </article>
+  `;
+}
+
 function renderStats() {
   const { metrics, openclaw } = dashboard;
   const statCards = [
@@ -265,7 +1462,7 @@ function renderStats() {
     {
       label: 'Completed after review',
       value: metrics.doneCount,
-      detail: `${dashboard.activeRuns.length} active process${dashboard.activeRuns.length === 1 ? '' : 'es'}`,
+      detail: `${dashboard.activeRuns.length + (dashboard.reviewEnvironments?.length || 0)} active process${dashboard.activeRuns.length + (dashboard.reviewEnvironments?.length || 0) === 1 ? '' : 'es'}`,
     },
   ];
 
@@ -288,45 +1485,183 @@ function renderStats() {
   runningAgentsPill.textContent = `${metrics.busyAgentCount} running`;
   tokenTotalPill.textContent = `${metrics.totalSessionTokens.toLocaleString()} tokens`;
   sessionCountPill.textContent = `${openclaw.sessions.length} sessions`;
-  backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length} tracked`;
+  backgroundTaskPill.textContent = `${dashboard.activeRuns.length + openclaw.backgroundTasks.length + (dashboard.reviewEnvironments?.length || 0)} tracked`;
   historyCountPill.textContent = `${metrics.doneCount} completed`;
+  runCountPill.textContent = `${dashboard.runs.length} runs`;
   agentCountPill.textContent = `${dashboard.agents.length} agents`;
 }
 
-function buildTaskActions(task) {
+function buildTaskActions(task, options = {}) {
+  const { compact = false, includeSecondary = !compact } = options;
   const actions = [];
   const laneIndex = dashboard.lanes.findIndex((lane) => lane.id === task.lane);
   const isRunning = task.runStatus === 'running';
+  const blocked = isTaskBlocked(task);
+  const splitParent = isSplitParentTask(task);
+  const project = getProjectForTask(task);
+  const reviewServices = getProjectReviewServices(project);
+  const reviewEnvironment = task.reviewEnvironment || null;
+  const reviewLabel = reviewEnvironment?.status === 'failed' ? 'Retry service' : 'Start service';
 
   if (!isRunning && laneIndex > 0) {
-    actions.push(`<button class="button ghost" data-action="move-left" data-task-id="${task.id}">← Back</button>`);
+    actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="move-left" data-task-id="${task.id}">Back</button>`);
   }
 
   if (task.lane === 'approval') {
-    actions.push(`<button class="button primary" data-action="approve" data-task-id="${task.id}">Approve</button>`);
+    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="approve" data-task-id="${task.id}" ${splitParent ? 'disabled title="Use the split child tasks instead."' : ''}>Approve</button>`);
   } else if (task.lane === 'ready') {
-    actions.push(`<button class="button primary" data-action="assign" data-task-id="${task.id}">Assign real agent</button>`);
+    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="assign" data-task-id="${task.id}" ${blocked ? `disabled title="${escapeHtml(formatBlockingSummary(task))}"` : ''}>${blocked ? 'Blocked' : 'Assign'}</button>`);
   } else if (task.lane === 'review') {
-    actions.push(`<button class="button primary" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
-  } else if (!isRunning && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
-    actions.push(`<button class="button ghost" data-action="move-right" data-task-id="${task.id}">Advance</button>`);
+    if (reviewEnvironment?.status === 'ready' && reviewEnvironment.openUrl) {
+      actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="open-review" data-task-id="${task.id}">Open service</button>`);
+    } else if (reviewEnvironment?.status === 'starting') {
+      actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" disabled title="Wait until the review services report ready.">Open when ready</button>`);
+    }
+    if (reviewEnvironment && ['starting', 'ready', 'stopping'].includes(reviewEnvironment.status)) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="stop-review" data-task-id="${task.id}">${reviewEnvironment.status === 'stopping' ? 'Stopping…' : 'Stop service'}</button>`);
+    } else if (reviewServices.length) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="start-review" data-task-id="${task.id}">${reviewLabel}</button>`);
+    }
+    if (hasRepairableReviewIssue(task)) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="create-review-fix-task" data-task-id="${task.id}">Create repair task</button>`);
+    }
+    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Complete</button>`);
+  } else if (task.lane === 'definition') {
+    if (!splitParent) {
+      actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="split-task" data-task-id="${task.id}">Split with Jarvis</button>`);
+    }
+    actions.push(`<button class="button primary ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}" ${splitParent ? 'disabled title="Move the child tasks forward instead."' : ''}>Send to Approval</button>`);
+  } else if (!isRunning && !splitParent && laneIndex < dashboard.lanes.length - 1 && !['ready', 'approval', 'done'].includes(task.lane)) {
+    actions.push(`<button class="button ghost ${compact ? 'compact-action' : ''}" data-action="move-right" data-task-id="${task.id}">Next</button>`);
   }
 
-  if (!isRunning && task.lane !== 'done') {
+  if (includeSecondary && !isRunning && task.lane !== 'done') {
     actions.push(`<button class="button ghost" data-action="reassign" data-task-id="${task.id}">Reassign</button>`);
   }
 
-  if (!isRunning) {
+  if (includeSecondary && !isRunning) {
     actions.push(`<button class="button ghost danger" data-action="delete" data-task-id="${task.id}">Delete</button>`);
   }
 
   return actions.join('');
 }
 
+function isTaskCardDraggable(task, laneId) {
+  return laneId !== 'done' && task?.runStatus !== 'running';
+}
+
+function clearTaskDragState() {
+  dragState = null;
+  document.body.classList.remove('dragging-task-card');
+  kanbanBoard.querySelectorAll('.task-card.dragging').forEach((card) => card.classList.remove('dragging'));
+  kanbanBoard.querySelectorAll('.task-stack.drag-over-stack').forEach((stack) => stack.classList.remove('drag-over-stack'));
+  kanbanBoard.querySelectorAll('.task-card.drop-target-before').forEach((card) => card.classList.remove('drop-target-before'));
+}
+
+function findDropPlacement(stack, clientY) {
+  const cards = [...stack.querySelectorAll('.task-card[data-task-id]')].filter((card) => card.dataset.taskId !== dragState?.taskId);
+
+  for (const card of cards) {
+    const rect = card.getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) {
+      return {
+        beforeTaskId: card.dataset.taskId,
+        afterTaskId: null,
+      };
+    }
+  }
+
+  return {
+    beforeTaskId: null,
+    afterTaskId: cards.at(-1)?.dataset.taskId || null,
+  };
+}
+
+function applyDropIndicator(stack, placement) {
+  kanbanBoard.querySelectorAll('.task-card.drop-target-before').forEach((card) => card.classList.remove('drop-target-before'));
+  kanbanBoard.querySelectorAll('.task-stack.drag-over-stack').forEach((item) => {
+    if (item !== stack) {
+      item.classList.remove('drag-over-stack');
+    }
+  });
+
+  stack.classList.add('drag-over-stack');
+  if (placement.beforeTaskId) {
+    stack.querySelector(`.task-card[data-task-id="${placement.beforeTaskId}"]`)?.classList.add('drop-target-before');
+  }
+}
+
+function handleTaskCardDragStart(event) {
+  const card = event.currentTarget;
+  const task = getTaskById(card.dataset.taskId);
+  if (!task || !isTaskCardDraggable(task, task.lane)) {
+    event.preventDefault();
+    return;
+  }
+
+  dragState = {
+    taskId: task.id,
+    lane: task.lane,
+  };
+
+  card.classList.add('dragging');
+  document.body.classList.add('dragging-task-card');
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', task.id);
+  }
+}
+
+function handleTaskCardDragEnd(event) {
+  event.currentTarget.classList.remove('dragging');
+  window.setTimeout(() => {
+    clearTaskDragState();
+  }, 0);
+}
+
+function handleTaskStackDragOver(event) {
+  if (!dragState) {
+    return;
+  }
+
+  const stack = event.currentTarget;
+  if (stack.dataset.lane !== dragState.lane) {
+    return;
+  }
+
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move';
+  }
+  applyDropIndicator(stack, findDropPlacement(stack, event.clientY));
+}
+
+function handleTaskStackDrop(event) {
+  if (!dragState) {
+    return;
+  }
+
+  const stack = event.currentTarget;
+  if (stack.dataset.lane !== dragState.lane) {
+    clearTaskDragState();
+    return;
+  }
+
+  event.preventDefault();
+  const placement = findDropPlacement(stack, event.clientY);
+  const taskId = dragState.taskId;
+  clearTaskDragState();
+  mutate(() => api(`/api/tasks/${taskId}/reorder`, {
+    method: 'POST',
+    body: JSON.stringify(placement.beforeTaskId ? { beforeTaskId: placement.beforeTaskId } : placement.afterTaskId ? { afterTaskId: placement.afterTaskId } : {}),
+  }));
+}
+
 function buildSummaryTaskCard(task, mode) {
+  const blocked = mode === 'ready' && isTaskBlocked(task);
   const actionLabel = mode === 'approval' ? 'Approve' : mode === 'ready' ? 'Assign' : null;
   const action = actionLabel
-    ? `<button class="button ${mode === 'approval' ? 'ghost' : 'primary'}" data-action="${mode === 'approval' ? 'approve' : 'assign'}" data-task-id="${task.id}">${actionLabel}</button>`
+    ? `<button class="button ${mode === 'approval' ? 'ghost' : 'primary'}" data-action="${mode === 'approval' ? 'approve' : 'assign'}" data-task-id="${task.id}" ${blocked ? `disabled title="${escapeHtml(formatBlockingSummary(task))}"` : ''}>${blocked ? 'Blocked' : actionLabel}</button>`
     : '';
 
   return `
@@ -343,8 +1678,8 @@ function buildSummaryTaskCard(task, mode) {
 }
 
 function renderOverview() {
-  const approvals = dashboard.approvals.slice(0, 4);
-  const readyTasks = dashboard.tasks.filter((task) => task.lane === 'ready').slice(0, 4);
+  const approvals = sortTasksForLane(dashboard.approvals, 'approval').slice(0, 4);
+  const readyTasks = sortTasksForLane(dashboard.tasks.filter((task) => task.lane === 'ready'), 'ready').slice(0, 4);
   const agents = dashboard.agents.slice().sort((a, b) => a.name.localeCompare(b.name));
   const activity = dashboard.activity.slice(0, 6);
 
@@ -391,27 +1726,24 @@ function renderOverview() {
 
 function renderApprovals() {
   approvalList.innerHTML = '';
-  if (!dashboard.approvals.length) {
-    approvalList.innerHTML = '<div class="empty-state">Nothing is waiting for approval right now.</div>';
+  const approvals = getTaskBoardApprovals();
+  approvalCountPill.textContent = `${approvals.length} waiting`;
+  if (!approvals.length) {
+    approvalList.innerHTML = '<div class="empty-state">Nothing is waiting for approval on this project right now.</div>';
     return;
   }
 
-  approvalList.innerHTML = dashboard.approvals.map((task) => buildSummaryTaskCard(task, 'approval')).join('');
+  approvalList.innerHTML = approvals.map((task) => buildSummaryTaskCard(task, 'approval')).join('');
 }
 
 function renderKanban() {
   kanbanBoard.innerHTML = '';
-  const doneTasks = getDoneTasks();
+  const boardTasks = getTaskBoardTasks();
+  const doneTasks = getDoneTasks(boardTasks);
   const visibleDoneTasks = getVisibleDoneTasks(doneTasks);
 
   dashboard.lanes.forEach((lane) => {
-    const tasks = (lane.id === 'done' ? visibleDoneTasks : dashboard.tasks.filter((task) => task.lane === lane.id))
-      .sort((a, b) => {
-        if (lane.id === 'done') {
-          return getTaskCompletionTime(b) - getTaskCompletionTime(a) || priorityRank[b.priority] - priorityRank[a.priority];
-        }
-        return priorityRank[b.priority] - priorityRank[a.priority] || (b.createdAt || 0) - (a.createdAt || 0);
-      });
+    const tasks = sortTasksForLane(lane.id === 'done' ? visibleDoneTasks : boardTasks.filter((task) => task.lane === lane.id), lane.id);
 
     const countLabel =
       lane.id === 'done'
@@ -431,6 +1763,18 @@ function renderKanban() {
     `;
 
     const stack = column.querySelector('.task-stack');
+    stack.dataset.lane = lane.id;
+    if (lane.id !== 'done') {
+      stack.classList.add('reorderable-stack');
+      stack.addEventListener('dragover', handleTaskStackDragOver);
+      stack.addEventListener('drop', handleTaskStackDrop);
+      stack.addEventListener('dragleave', (event) => {
+        if (!stack.contains(event.relatedTarget)) {
+          stack.classList.remove('drag-over-stack');
+          stack.querySelectorAll('.drop-target-before').forEach((card) => card.classList.remove('drop-target-before'));
+        }
+      });
+    }
     if (!tasks.length) {
       stack.innerHTML = `<div class="empty-state">${lane.id === 'done' ? 'No completed tasks yet.' : 'No tasks in this lane.'}</div>`;
     }
@@ -438,21 +1782,62 @@ function renderKanban() {
     tasks.forEach((task) => {
       const node = cardTemplate.content.firstElementChild.cloneNode(true);
       const agent = findAgent(task.assignedAgentId);
-      const runStatus = task.lastRun?.status || task.runStatus;
-      const usage = task.lastRun?.usage?.total ? `${task.lastRun.usage.total.toLocaleString()} tokens` : null;
-      const outputPreview = task.lastRun?.output ? truncate(task.lastRun.output, 220) : '';
-      const errorPreview = task.lastRun?.error ? truncate(cleanRuntimeNote(task.lastRun.error), 180) : '';
+      const notesNode = node.querySelector('.task-notes');
+      const timeMetaNode = node.querySelector('.task-time-meta');
+
+      node.dataset.taskId = task.id;
+      node.dataset.lane = lane.id;
+      node.setAttribute('tabindex', '0');
+      node.setAttribute('role', 'button');
+      node.setAttribute('aria-label', `Open details for ${task.title}`);
+      node.classList.add('compact-task-card');
+      node.draggable = isTaskCardDraggable(task, lane.id);
+
+      if (node.draggable) {
+        node.classList.add('draggable-task-card');
+        node.addEventListener('dragstart', handleTaskCardDragStart);
+        node.addEventListener('dragend', handleTaskCardDragEnd);
+      }
+
+      const boardProject = getCurrentTaskBoardProject();
+      const ownerNode = node.querySelector('.task-owner');
 
       node.querySelector('.priority-dot').classList.add(priorityClass(task.priority));
       node.querySelector('.task-priority-label').textContent = task.priority;
-      node.querySelector('.task-owner').textContent = task.owner || 'No stream';
+      ownerNode.textContent = task.owner || 'No stream';
+      ownerNode.hidden = Boolean(boardProject);
       node.querySelector('.task-title').textContent = task.title;
-      node.querySelector('.task-notes').textContent = task.notes || 'No notes yet.';
       node.querySelector('.skill-tag').textContent = skillLabels[task.skill] || task.skill;
       node.querySelector('.assignee-tag').textContent = agent
         ? `${agent.emoji} ${agent.name}${task.runStatus === 'running' ? ' running' : ''}`
         : 'Unassigned';
-      node.querySelector('.task-actions').innerHTML = buildTaskActions(task);
+      const timeMetaLine = buildTaskTimeMetaLine(task);
+      if (timeMetaLine) {
+        timeMetaNode.hidden = false;
+        timeMetaNode.textContent = timeMetaLine;
+      } else {
+        timeMetaNode.hidden = true;
+        timeMetaNode.textContent = '';
+      }
+      node.querySelector('.task-actions').innerHTML = buildTaskActions(task, { compact: true });
+      if (task.liveStatus?.message) {
+        notesNode.textContent = `${task.liveStatus.message} Started ${relativeTime(task.liveStatus.startedAt)}.`;
+        notesNode.classList.add('live-task-note');
+      } else if (task.reviewEnvironment?.message) {
+        notesNode.textContent = task.reviewEnvironment.message;
+        notesNode.classList.add('live-task-note');
+        if (task.reviewEnvironment.status === 'failed') {
+          notesNode.classList.add('error-note');
+        }
+      } else if (isTaskBlocked(task)) {
+        notesNode.textContent = formatBlockingSummary(task);
+        notesNode.classList.add('live-task-note');
+      } else if (isSplitParentTask(task)) {
+        notesNode.textContent = `${formatSplitProgress(task)}. Use child tasks for implementation.`;
+        notesNode.classList.add('live-task-note');
+      } else {
+        notesNode.remove();
+      }
 
       if (task.preferredAgentId) {
         const preferredAgent = findAgent(task.preferredAgentId);
@@ -464,47 +1849,77 @@ function renderKanban() {
         }
       }
 
+      if (task.repoRole) {
+        const roleTag = document.createElement('span');
+        roleTag.className = 'tag';
+        roleTag.textContent = task.repoRole;
+        node.querySelector('.task-meta').appendChild(roleTag);
+      }
+
+      const idTag = document.createElement('span');
+      idTag.className = 'tag';
+      idTag.textContent = task.id;
+      node.querySelector('.task-meta').appendChild(idTag);
+
       if (lane.id === 'done') {
         const completedTag = document.createElement('span');
         completedTag.className = 'tag';
         completedTag.textContent = `Completed ${relativeTime(getTaskCompletionTime(task))}`;
         node.querySelector('.task-meta').appendChild(completedTag);
-      }
-
-      if (runStatus && runStatus !== 'idle') {
+      } else if (task.runStatus === 'running') {
         const statusTag = document.createElement('span');
         statusTag.className = 'tag';
-        statusTag.textContent = `Run: ${runStatus}`;
+        statusTag.textContent = 'Live run';
+        node.querySelector('.task-meta').appendChild(statusTag);
+      } else if (task.lastRun?.status && task.lastRun.status !== 'idle') {
+        const statusTag = document.createElement('span');
+        statusTag.className = 'tag';
+        statusTag.textContent = `Run: ${task.lastRun.status}`;
         node.querySelector('.task-meta').appendChild(statusTag);
       }
 
-      if (usage) {
-        const usageTag = document.createElement('span');
-        usageTag.className = 'tag';
-        usageTag.textContent = usage;
-        node.querySelector('.task-meta').appendChild(usageTag);
+      if (task.reviewEnvironment?.status) {
+        const reviewTag = document.createElement('span');
+        reviewTag.className = 'tag';
+        reviewTag.textContent = `Review env: ${task.reviewEnvironment.status}`;
+        node.querySelector('.task-meta').appendChild(reviewTag);
       }
 
-      if (task.runStatus === 'running') {
-        const runningNote = document.createElement('p');
-        runningNote.className = 'task-run-note';
-        runningNote.textContent = `Live run started ${relativeTime(task.lastRun?.startedAt || task.updatedAt)}.`;
-        node.appendChild(runningNote);
+      if (isTaskBlocked(task)) {
+        const blockedTag = document.createElement('span');
+        blockedTag.className = 'tag';
+        blockedTag.textContent = 'Blocked';
+        node.querySelector('.task-meta').appendChild(blockedTag);
       }
 
-      if (outputPreview) {
-        const output = document.createElement('p');
-        output.className = 'task-run-note';
-        output.textContent = `Latest run: ${outputPreview}`;
-        node.appendChild(output);
+      if (isSplitParentTask(task)) {
+        const splitTag = document.createElement('span');
+        splitTag.className = 'tag';
+        splitTag.textContent = 'Split parent';
+        node.querySelector('.task-meta').appendChild(splitTag);
+
+        const splitProgressTag = document.createElement('span');
+        splitProgressTag.className = 'tag';
+        splitProgressTag.textContent = formatSplitProgress(task);
+        node.querySelector('.task-meta').appendChild(splitProgressTag);
       }
 
-      if (errorPreview) {
-        const error = document.createElement('p');
-        error.className = 'task-run-note error-note';
-        error.textContent = `Runtime note: ${errorPreview}`;
-        node.appendChild(error);
-      }
+      node.addEventListener('click', (event) => {
+        if (event.target.closest('button, a')) {
+          return;
+        }
+        openTaskDetail(task.id);
+      });
+
+      node.addEventListener('keydown', (event) => {
+        if (event.target.closest('button, a')) {
+          return;
+        }
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openTaskDetail(task.id);
+        }
+      });
 
       stack.appendChild(node);
     });
@@ -624,7 +2039,7 @@ function renderBackgroundTasks() {
     const agent = findAgent(run.agentId);
     return {
       title: task?.title || run.taskId,
-      detail: `${agent ? `${agent.emoji} ${agent.name}` : run.agentId} is running it, pid ${run.pid}.`,
+      detail: run.summary || `${agent ? `${agent.emoji} ${agent.name}` : run.agentId} is running it, pid ${run.pid}.`,
       updatedAt: run.startedAt,
       kind: 'Active process',
     };
@@ -692,19 +2107,639 @@ function renderHistory() {
     : '<div class="empty-state">No completed task history yet.</div>';
 }
 
+function renderRuns() {
+  const runs = dashboard.runs || [];
+  const failedCount = runs.filter((run) => run.status === 'failed').length;
+
+  runSummary.textContent = runs.length
+    ? `${runs.length} durable run record${runs.length === 1 ? '' : 's'} loaded from SQLite, with ${failedCount} failure${failedCount === 1 ? '' : 's'} visible.`
+    : 'Run records will appear here once agents start executing tasks.';
+
+  runList.innerHTML = runs.length
+    ? runs.map((run) => buildRunCard(run)).join('')
+    : '<div class="empty-state">No durable run history yet.</div>';
+}
+
+function renderSystemHistory() {
+  const systemTasks = dashboard.systemHistory?.tasks || [];
+  const systemSessions = dashboard.systemHistory?.sessions || [];
+  const terminalTasks = systemTasks.filter((task) => ['succeeded', 'failed', 'timed_out', 'cancelled', 'lost'].includes(task.status));
+
+  systemTaskHistoryCountPill.textContent = `${systemTasks.length} task${systemTasks.length === 1 ? '' : 's'}`;
+  systemSessionHistoryCountPill.textContent = `${systemSessions.length} session${systemSessions.length === 1 ? '' : 's'}`;
+
+  systemTaskHistorySummary.textContent = systemTasks.length
+    ? `${systemTasks.length} tracked OpenClaw task${systemTasks.length === 1 ? '' : 's'}, with ${terminalTasks.length} finished and visible here newest first.`
+    : 'OpenClaw background task history will appear here when the system has durable task runs to show.';
+
+  systemSessionHistorySummary.textContent = systemSessions.length
+    ? `${systemSessions.length} known session${systemSessions.length === 1 ? '' : 's'} across agents, sorted by most recent activity.`
+    : 'Session activity will appear here once OpenClaw has visible session state.';
+
+  systemTaskHistoryList.innerHTML = systemTasks.length
+    ? systemTasks.map((task) => buildSystemTaskCard(task)).join('')
+    : '<div class="empty-state">No system-wide OpenClaw task history yet.</div>';
+
+  systemSessionHistoryList.innerHTML = systemSessions.length
+    ? systemSessions.map((session) => buildSystemSessionCard(session)).join('')
+    : '<div class="empty-state">No system-wide session activity yet.</div>';
+}
+
+function getProjectTaskCount(projectName) {
+  return dashboard.tasks.filter((task) => task.owner === projectName).length;
+}
+
+function createEmptyProjectRepo() {
+  return {
+    id: `repo-${Math.random().toString(36).slice(2, 8)}`,
+    label: '',
+    role: '',
+    url: '',
+    primary: false,
+  };
+}
+
+function createEmptyProjectService() {
+  return {
+    id: `svc-${Math.random().toString(36).slice(2, 8)}`,
+    name: '',
+    repoRole: '',
+    workingDirectory: '',
+    startCommand: '',
+    localUrl: '',
+    healthcheckUrl: '',
+  };
+}
+
+function renderProjectRepoFields(entries = []) {
+  const repos = entries.length ? entries : [createEmptyProjectRepo()];
+  const primaryIndex = Math.max(0, repos.findIndex((repo) => repo.primary));
+
+  projectRepoList.innerHTML = repos
+    .map(
+      (repo, index) => `
+        <article class="project-config-card" data-project-repo-row data-project-repo-id="${escapeHtml(repo.id || '')}">
+          <div class="project-config-card-header">
+            <strong>Repo ${index + 1}</strong>
+            <button type="button" class="button ghost danger compact-action" data-project-repo-remove="${index}">Remove</button>
+          </div>
+          <div class="project-config-grid">
+            <label>
+              Label
+              <input type="text" data-project-repo-label value="${escapeHtml(repo.label || '')}" placeholder="Web app" />
+            </label>
+            <label>
+              Role tag
+              <input type="text" data-project-repo-role value="${escapeHtml(repo.role || '')}" placeholder="frontend, backend, service, docs, hq" />
+            </label>
+            <label class="wide">
+              Repository URL
+              <input type="text" data-project-repo-url value="${escapeHtml(repo.url || '')}" placeholder="https://github.com/acme/project" />
+            </label>
+            <label class="project-config-inline">
+              <input type="radio" name="project-primary-repo" value="${index}" ${index === primaryIndex ? 'checked' : ''} />
+              Use this repo for task code changes by default
+            </label>
+          </div>
+        </article>
+      `
+    )
+    .join('');
+}
+
+function renderProjectServiceFields(entries = []) {
+  const services = entries.length ? entries : [];
+  projectServiceList.innerHTML = services.length
+    ? services
+        .map(
+          (service, index) => `
+            <article class="project-config-card" data-project-service-row data-project-service-id="${escapeHtml(service.id || '')}">
+              <div class="project-config-card-header">
+                <strong>Service ${index + 1}</strong>
+                <button type="button" class="button ghost danger compact-action" data-project-service-remove="${index}">Remove</button>
+              </div>
+              <div class="project-config-grid">
+                <label>
+                  Service name
+                  <input type="text" data-project-service-name value="${escapeHtml(service.name || '')}" placeholder="Frontend app" />
+                </label>
+                <label>
+                  Repo role tag
+                  <input type="text" data-project-service-repo-role value="${escapeHtml(service.repoRole || '')}" placeholder="frontend" />
+                </label>
+                <label>
+                  Working directory
+                  <input type="text" data-project-service-working-directory value="${escapeHtml(service.workingDirectory || '')}" placeholder="apps/web" />
+                </label>
+                <label>
+                  Start command
+                  <input type="text" data-project-service-start-command value="${escapeHtml(service.startCommand || '')}" placeholder="npm run dev" />
+                </label>
+                <label>
+                  Local URL
+                  <input type="text" data-project-service-local-url value="${escapeHtml(service.localUrl || '')}" placeholder="http://localhost:5173" />
+                </label>
+                <label>
+                  Healthcheck URL
+                  <input type="text" data-project-service-healthcheck-url value="${escapeHtml(service.healthcheckUrl || '')}" placeholder="http://localhost:5173/health" />
+                </label>
+              </div>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No review services configured yet. Add one when you want start/open/stop review controls later.</div>';
+}
+
+function readProjectRepoFields() {
+  const rows = [...projectRepoList.querySelectorAll('[data-project-repo-row]')];
+  const primaryIndex = Number(projectRepoList.querySelector('input[name="project-primary-repo"]:checked')?.value ?? 0);
+  return rows
+    .map((row, index) => ({
+      id: row.dataset.projectRepoId || `repo-${index}`,
+      label: row.querySelector('[data-project-repo-label]')?.value?.trim() || '',
+      role: row.querySelector('[data-project-repo-role]')?.value?.trim() || '',
+      url: row.querySelector('[data-project-repo-url]')?.value?.trim() || '',
+      primary: index === primaryIndex,
+    }))
+    .filter((repo) => repo.label || repo.role || repo.url);
+}
+
+function readProjectServiceFields() {
+  const rows = [...projectServiceList.querySelectorAll('[data-project-service-row]')];
+  return rows
+    .map((row, index) => ({
+      id: row.dataset.projectServiceId || `svc-${index}`,
+      name: row.querySelector('[data-project-service-name]')?.value?.trim() || '',
+      repoRole: row.querySelector('[data-project-service-repo-role]')?.value?.trim() || '',
+      workingDirectory: row.querySelector('[data-project-service-working-directory]')?.value?.trim() || '',
+      startCommand: row.querySelector('[data-project-service-start-command]')?.value?.trim() || '',
+      localUrl: row.querySelector('[data-project-service-local-url]')?.value?.trim() || '',
+      healthcheckUrl: row.querySelector('[data-project-service-healthcheck-url]')?.value?.trim() || '',
+    }))
+    .filter((service) => service.name || service.repoRole || service.workingDirectory || service.startCommand || service.localUrl || service.healthcheckUrl);
+}
+
+function openTaskBoard(projectId) {
+  window.location.hash = `tasks/${projectId}`;
+}
+
+function renderTaskBoardPicker() {
+  const projects = getSortedProjects();
+  const currentProject = getCurrentTaskBoardProject();
+
+  taskBoardCountPill.textContent = `${projects.length} project${projects.length === 1 ? '' : 's'}`;
+  taskBoardSummary.textContent = projects.length
+    ? 'Choose a project board to work inside a single project-scoped kanban.'
+    : 'Create a project first, then open its kanban board here.';
+
+  taskBoardList.innerHTML = projects.length
+    ? projects
+        .map((project) => {
+          const projectTasks = getTasksForProject(project);
+          const approvalCount = projectTasks.filter((task) => task.lane === 'approval').length;
+          const readyCount = projectTasks.filter((task) => task.lane === 'ready').length;
+          const activeCount = projectTasks.filter((task) => ['inprogress', 'review'].includes(task.lane)).length;
+          const activeClass = currentProject?.id === project.id ? ' active' : '';
+          return `
+            <button type="button" class="project-board-chip${activeClass}" data-project-board-id="${project.id}">
+              <strong>${escapeHtml(project.name)}</strong>
+              <span>${projectTasks.length} task${projectTasks.length === 1 ? '' : 's'}</span>
+              <small>${approvalCount} waiting, ${readyCount} ready, ${activeCount} active</small>
+            </button>
+          `;
+        })
+        .join('')
+    : '<div class="empty-state">No projects yet. Add one in Projects first.</div>';
+}
+
+function renderTaskBoardContext() {
+  const project = getCurrentTaskBoardProject();
+  selectedTaskBoardProjectId = project?.id || null;
+
+  if (!project) {
+    taskBoardShell.hidden = true;
+    taskBoardEmpty.hidden = false;
+    if (taskBoardTitle) taskBoardTitle.textContent = 'Define work before agents touch it';
+    if (taskBoardDescription) taskBoardDescription.textContent = 'Open a project board above to create project-scoped tasks.';
+    if (taskBoardProjectStats) taskBoardProjectStats.innerHTML = '';
+    if (taskBoardProjectServices) {
+      taskBoardProjectServices.hidden = true;
+      taskBoardProjectServices.innerHTML = '';
+    }
+    if (taskBoardContextPill) taskBoardContextPill.textContent = 'Select a project';
+    return;
+  }
+
+  const visibleBoardStats = getVisibleTaskBoardStats(project);
+  const lifetimeStats = getProjectStats(project);
+  taskBoardShell.hidden = false;
+  taskBoardEmpty.hidden = true;
+  if (taskBoardTitle) taskBoardTitle.textContent = `${project.name} task intake`;
+  if (taskBoardDescription) taskBoardDescription.textContent = `${getProjectWorkflowLabel(project)} · ${getTasksForProject(project).length} task${getTasksForProject(project).length === 1 ? '' : 's'} currently on this board. Drag cards within a lane to set execution order.`;
+  if (taskBoardProjectStats) {
+    taskBoardProjectStats.innerHTML = buildProjectStatsCards(project, {
+      primaryStats: visibleBoardStats,
+      lifetimeStats,
+      primaryScopeLabel: 'Current board',
+    });
+  }
+  if (taskBoardProjectServices) {
+    const serviceCards = buildProjectReviewServiceCards(project);
+    taskBoardProjectServices.hidden = !serviceCards;
+    taskBoardProjectServices.innerHTML = serviceCards;
+  }
+  if (taskBoardContextPill) taskBoardContextPill.textContent = `Project: ${project.name}`;
+}
+
+function syncProjectFormMode() {
+  const editing = Boolean(selectedProjectId);
+  projectFormModePill.textContent = editing ? 'Edit' : 'Create';
+  projectSubmitButton.textContent = editing ? 'Save project' : 'Create project';
+  projectCancelButton.hidden = !editing;
+}
+
+function clearProjectForm() {
+  selectedProjectId = null;
+  projectForm.reset();
+  renderProjectRepoFields([createEmptyProjectRepo()]);
+  renderProjectServiceFields([]);
+  if (projectKeepDocsUpToDateInput) {
+    projectKeepDocsUpToDateInput.checked = false;
+  }
+  syncProjectFormMode();
+}
+
+function openProjectEdit(projectId) {
+  const project = dashboard.projects.find((item) => item.id === projectId);
+  if (!project) return;
+
+  selectedProjectId = project.id;
+  projectNameInput.value = project.name || '';
+  renderProjectRepoFields(getProjectRepos(project));
+  renderProjectServiceFields(getProjectReviewServices(project));
+  projectGitWorkflowSelect.value = getProjectGitWorkflow(project);
+  if (projectKeepDocsUpToDateInput) {
+    projectKeepDocsUpToDateInput.checked = getProjectKeepDocsUpToDate(project);
+  }
+  projectNotesInput.value = project.notes || '';
+  syncProjectFormMode();
+  renderProjects();
+  projectForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  projectNameInput.focus();
+}
+
+function renderProjects() {
+  const projects = getSortedProjects();
+
+  projectCountPill.textContent = `${projects.length} project${projects.length === 1 ? '' : 's'}`;
+  projectSummary.textContent = projects.length
+    ? `${projects.length} linked project${projects.length === 1 ? '' : 's'} with repo maps and review run config available for task boards.`
+    : 'No projects yet. Add the first project with at least one GitHub repo to populate the task boards.';
+
+  projectList.innerHTML = projects.length
+    ? projects
+        .map((project) => {
+          const taskCount = getProjectTaskCount(getProjectName(project));
+          const primaryRepo = getProjectPrimaryRepo(project);
+          const repoCount = getProjectRepos(project).length;
+          const reviewServiceCount = getProjectReviewServices(project).length;
+          const stats = getProjectStats(project);
+          return `
+            <article class="project-card">
+              <div class="project-card-header">
+                <div>
+                  <h3>${escapeHtml(getProjectName(project))}</h3>
+                  <p>${primaryRepo ? `<a href="${escapeHtml(primaryRepo.url)}" target="_blank" rel="noreferrer">${escapeHtml(primaryRepo.label || primaryRepo.role || primaryRepo.url)}</a>` : 'No primary repo configured yet.'}</p>
+                </div>
+                <span class="pill neutral">${taskCount} task${taskCount === 1 ? '' : 's'}</span>
+              </div>
+              <p>${escapeHtml(project.notes || 'No notes added yet.')}</p>
+              <div class="task-meta">
+                <span class="tag">${escapeHtml(getProjectWorkflowLabel(project))}</span>
+                <span class="tag">${repoCount} repo${repoCount === 1 ? '' : 's'}</span>
+                <span class="tag">${reviewServiceCount} review service${reviewServiceCount === 1 ? '' : 's'}</span>
+                ${getProjectKeepDocsUpToDate(project) ? '<span class="tag">Docs auto-update on</span>' : ''}
+              </div>
+              ${stats ? `
+                <div class="project-stats-grid compact-project-stats">
+                  ${buildProjectStatsCards(project)}
+                </div>
+              ` : ''}
+              <div class="task-actions">
+                <button type="button" class="button primary" data-project-action="open-board" data-project-id="${project.id}">Open board</button>
+                <button type="button" class="button ghost" data-project-action="edit" data-project-id="${project.id}">Edit</button>
+                <button type="button" class="button ghost danger" data-project-action="delete" data-project-id="${project.id}">Delete</button>
+              </div>
+            </article>
+          `;
+        })
+        .join('')
+    : '<div class="empty-state">No projects yet. Add your first linked GitHub repo here.</div>';
+
+  if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) {
+    clearProjectForm();
+  } else {
+    syncProjectFormMode();
+  }
+}
+
+function renderTaskRunHistory(task) {
+  const runs = (dashboard.runs || []).filter((run) => run.taskId === task.id);
+  taskRunHistoryCount.textContent = `${runs.length} run${runs.length === 1 ? '' : 's'}`;
+  taskRunHistory.innerHTML = runs.length
+    ? runs.slice(0, 6).map((run) => buildRunCard(run, { compact: true })).join('')
+    : '<div class="empty-state">No durable run history recorded for this task yet.</div>';
+}
+
+function syncTaskDetailForms(task) {
+  if (taskDetailDraftTaskId === task.id) {
+    return;
+  }
+
+  const boardProject = getCurrentTaskBoardProject();
+
+  populateAgentSelectOptions(taskEditAgent, task.preferredAgentId || '');
+  populateBlockedByOptions(taskEditBlockedBy, task, task.blockedBy || []);
+  if (boardProject) {
+    taskEditOwner.innerHTML = `<option value="${escapeHtml(boardProject.name)}">${escapeHtml(boardProject.name)}</option>`;
+    taskEditOwner.value = boardProject.name;
+    taskEditOwner.disabled = true;
+    if (taskEditOwnerField) {
+      taskEditOwnerField.hidden = true;
+    }
+  } else {
+    populateProjectSelectOptions(taskEditOwner, task.owner || '', { allowFallback: true, includePlaceholder: true });
+    taskEditOwner.disabled = false;
+    if (taskEditOwnerField) {
+      taskEditOwnerField.hidden = false;
+    }
+  }
+  taskEditTitle.value = task.title || '';
+  taskEditPriority.value = task.priority || 'medium';
+  taskEditNotes.value = task.notes || '';
+
+  if (!taskCommentAuthor.value.trim()) {
+    taskCommentAuthor.value = 'Operator';
+  }
+  taskCommentBody.value = '';
+  taskDetailDraftTaskId = task.id;
+}
+
+function renderTaskComments(task) {
+  const comments = Array.isArray(task.comments) ? [...task.comments] : [];
+  taskCommentCount.textContent = `${comments.length} comment${comments.length === 1 ? '' : 's'}`;
+
+  taskCommentList.innerHTML = comments.length
+    ? comments
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+        .map(
+          (comment) => `
+            <article class="activity-item comment-item">
+              <div class="activity-header">
+                <strong>${escapeHtml(comment.author || 'Operator')}</strong>
+                <small>${relativeTime(comment.createdAt)}</small>
+              </div>
+              <p>${escapeHtml(comment.text)}</p>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="empty-state">No comments yet. Use this thread for clarifications and implementation notes.</div>';
+}
+
+function renderTaskDetail() {
+  if (!selectedTaskId) {
+    taskDetailDrawer.classList.remove('open');
+    taskDetailDrawer.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('drawer-open');
+    return;
+  }
+
+  const task = dashboard.tasks.find((item) => item.id === selectedTaskId);
+  if (!task || !isTaskVisibleInCurrentBoard(task)) {
+    closeTaskDetail();
+    return;
+  }
+
+  const boardProject = getCurrentTaskBoardProject();
+  const comments = Array.isArray(task.comments) ? task.comments : [];
+  const agent = findAgent(task.assignedAgentId);
+  const preferredAgent = findAgent(task.preferredAgentId);
+  const cleanError = cleanRuntimeNote(task.lastRun?.error);
+  const outputPreview = task.lastRun?.output ? truncate(task.lastRun.output, 600) : '';
+  const timeSummary = getTaskTimeSummary(task);
+  const reviewEnvironment = task.reviewEnvironment || null;
+  const reviewServiceSummary = reviewEnvironment?.services?.length
+    ? reviewEnvironment.services
+        .map((service) => `${service.name}: ${service.status}${service.branchName ? ` on ${service.branchName}` : ''}${service.localUrl ? ` (${service.localUrl})` : ''}`)
+        .join(' • ')
+    : '';
+  const reviewFailure = getReviewIssueSummary(task);
+  const blockingSummary = formatBlockingSummary(task);
+  const splitProgress = formatSplitProgress(task);
+  const detailTags = [
+    task.id,
+    task.priority,
+    skillLabels[task.skill] || task.skill,
+    task.repoRole || null,
+    boardProject ? null : task.owner || 'No stream',
+    agent ? `${agent.emoji} ${agent.name}` : 'Unassigned',
+    preferredAgent ? `Preferred: ${preferredAgent.name}` : null,
+    reviewEnvironment ? `Review env: ${reviewEnvironment.status}` : null,
+    blockingSummary || null,
+    isSplitParentTask(task) ? 'Split parent' : null,
+    splitProgress || null,
+    `${comments.length} comment${comments.length === 1 ? '' : 's'}`,
+    task.lane === 'done' ? `Completed ${relativeTime(getTaskCompletionTime(task))}` : `Updated ${relativeTime(task.updatedAt)}`,
+  ].filter(Boolean);
+  const editLocked = task.runStatus === 'running';
+
+  if (editLocked) {
+    isTaskEditMode = false;
+  }
+
+  taskDetailTitle.textContent = task.title;
+  taskDetailTags.innerHTML = detailTags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join('');
+  taskDetailNotes.textContent = task.notes || 'No definition notes provided for this task.';
+  if (timeSummary) {
+    taskDetailTimeSavingsPill.textContent = `Saved ${formatSignedDuration(timeSummary.estimatedSavedMs)}`;
+    taskDetailTimeSavingsPill.className = `pill ${timeSummary.estimatedSavedMs < 0 ? 'warning' : 'success'}`;
+    taskDetailTimeMetrics.innerHTML = `
+      <article class="project-stat-card">
+        <p class="project-stat-label">Agent time</p>
+        <div class="project-stat-value">${escapeHtml(formatDuration(timeSummary.actualAgentMs))}</div>
+        <p class="project-stat-detail">Across ${timeSummary.totalRunCount} run${timeSummary.totalRunCount === 1 ? '' : 's'}</p>
+      </article>
+      <article class="project-stat-card">
+        <p class="project-stat-label">Human estimate</p>
+        <div class="project-stat-value">${escapeHtml(formatDuration(timeSummary.estimatedHumanMs))}</div>
+        <p class="project-stat-detail">Heuristic ${escapeHtml(timeSummary.estimateVersion || 'estimate')}</p>
+      </article>
+      <article class="project-stat-card">
+        <p class="project-stat-label">Estimated time saved</p>
+        <div class="project-stat-value">${escapeHtml(formatSignedDuration(timeSummary.estimatedSavedMs))}</div>
+        <p class="project-stat-detail">${timeSummary.automationMultiplier ? `${timeSummary.automationMultiplier.toFixed(1)}x faster than human estimate` : 'More data needed'}</p>
+      </article>
+    `;
+  } else {
+    taskDetailTimeSavingsPill.textContent = 'No estimate';
+    taskDetailTimeSavingsPill.className = 'pill neutral';
+    taskDetailTimeMetrics.innerHTML = '<div class="empty-state">Time metrics will appear after the first real agent run finishes.</div>';
+  }
+  taskDetailSummary.hidden = isTaskEditMode;
+  taskDetailEditSection.hidden = !isTaskEditMode;
+  taskDetailEditToggle.textContent = isTaskEditMode ? 'Cancel edit' : 'Edit';
+  taskDetailEditToggle.disabled = editLocked;
+  taskDetailRunStatus.textContent = [
+    task.lastRun?.status
+      ? `Run status: ${task.lastRun.status}${task.lastRun?.usage?.total ? ` · ${task.lastRun.usage.total.toLocaleString()} tokens` : ''}`
+      : task.runStatus === 'running'
+        ? 'Run status: running'
+        : 'No run details recorded yet.',
+    reviewEnvironment ? `Review environment: ${reviewEnvironment.message}` : '',
+    blockingSummary,
+  ].filter(Boolean).join(' · ');
+  taskDetailOutput.textContent = [
+    outputPreview ? `Latest run: ${outputPreview}` : '',
+    reviewServiceSummary ? `Review services: ${reviewServiceSummary}` : '',
+  ].filter(Boolean).join('\n\n');
+  taskDetailError.textContent = [
+    cleanError ? `Runtime note: ${cleanError}` : '',
+    reviewFailure ? `Review environment: ${reviewFailure}` : '',
+  ].filter(Boolean).join('\n');
+  taskDetailActions.innerHTML = buildTaskActions(task, { includeSecondary: true });
+  taskEditSubmitButton.textContent = editLocked ? 'Locked while running' : 'Save changes';
+  [taskEditTitle, taskEditPriority, taskEditAgent, taskEditNotes, taskEditBlockedBy, taskEditSubmitButton].forEach((element) => {
+    element.disabled = editLocked;
+  });
+  taskEditOwner.disabled = editLocked || Boolean(boardProject);
+
+  syncTaskDetailForms(task);
+  renderTaskComments(task);
+  renderTaskRunHistory(task);
+
+  taskDetailDrawer.classList.add('open');
+  taskDetailDrawer.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('drawer-open');
+}
+
+function renderSplitTaskPlan(task, plan) {
+  splitTaskTitle.textContent = `Split ${task.title}`;
+  splitTaskSummary.textContent = 'Review the proposed child tasks, adjust agent ownership or dependency order if needed, then create them.';
+
+  splitTaskPlanList.innerHTML = plan
+    .map((entry, index) => {
+      const blockerOptions = plan
+        .filter((candidate) => candidate.tempId !== entry.tempId)
+        .map(
+          (candidate) => `<option value="${candidate.tempId}" ${(entry.blockedBy || []).includes(candidate.tempId) ? 'selected' : ''}>${escapeHtml(candidate.title)}</option>`
+        )
+        .join('');
+
+      return `
+        <article class="split-plan-card" data-split-plan-row data-temp-id="${entry.tempId}">
+          <div class="task-comments-header">
+            <strong>Child task ${index + 1}</strong>
+            <span class="pill neutral">${escapeHtml(entry.repoRole || 'implementation')}</span>
+          </div>
+          <div class="split-plan-grid">
+            <label class="modal-label wide">
+              Task title
+              <input type="text" data-split-title value="${escapeHtml(entry.title || '')}" />
+            </label>
+            <label class="modal-label">
+              Preferred agent
+              <select data-split-agent>
+                ${buildAgentOptions(entry.preferredAgentId || '')}
+              </select>
+            </label>
+            <label class="modal-label">
+              Repo role
+              <input type="text" data-split-role value="${escapeHtml(entry.repoRole || '')}" readonly />
+            </label>
+            <label class="modal-label wide">
+              Blocked by
+              <select data-split-blocked-by multiple size="4">
+                ${blockerOptions}
+              </select>
+              <small class="field-help">Use this to force execution order between the proposed child tasks.</small>
+            </label>
+            <label class="modal-label wide">
+              Notes
+              <textarea data-split-notes rows="5">${escapeHtml(entry.notes || '')}</textarea>
+            </label>
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+}
+
+function readSplitTaskPlan() {
+  return [...splitTaskPlanList.querySelectorAll('[data-split-plan-row]')].map((row) => ({
+    tempId: row.dataset.tempId,
+    title: row.querySelector('[data-split-title]')?.value?.trim() || '',
+    preferredAgentId: row.querySelector('[data-split-agent]')?.value?.trim() || '',
+    repoRole: row.querySelector('[data-split-role]')?.value?.trim() || '',
+    blockedBy: getSelectedValues(row.querySelector('[data-split-blocked-by]')),
+    notes: row.querySelector('[data-split-notes]')?.value?.trim() || '',
+  }));
+}
+
+async function openSplitTaskDialog(taskId) {
+  const task = getTaskById(taskId);
+  if (!task) {
+    return;
+  }
+  const response = await api(`/api/tasks/${taskId}/split-plan`);
+  pendingSplitTaskId = taskId;
+  renderSplitTaskPlan(task, response.plan || []);
+  splitTaskDialog.showModal();
+}
+
+function closeSplitTaskDialog() {
+  pendingSplitTaskId = null;
+  splitTaskPlanList.innerHTML = '';
+  splitTaskDialog.close();
+}
+
 function renderAll() {
   renderStats();
+  renderTaskBoardPicker();
+  renderTaskBoardContext();
   populateFormOptions();
+  renderKeywords();
   renderOverview();
   renderApprovals();
   renderKanban();
+  renderProjects();
   renderAgents();
   renderUsage();
   renderActivity();
   renderSessions();
   renderBackgroundTasks();
+  renderRuns();
   renderHistory();
+  renderSystemHistory();
+  renderTaskDetail();
   applyView();
+}
+
+function openTaskDetail(taskId) {
+  selectedTaskId = taskId;
+  taskDetailDraftTaskId = null;
+  isTaskEditMode = false;
+  renderTaskDetail();
+}
+
+function closeTaskDetail() {
+  selectedTaskId = null;
+  taskDetailDraftTaskId = null;
+  isTaskEditMode = false;
+  taskDetailDrawer.classList.remove('open');
+  taskDetailDrawer.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('drawer-open');
 }
 
 function openReassignDialog(task) {
@@ -722,13 +2757,18 @@ async function refreshDashboard() {
 async function mutate(action) {
   if (isMutating) return;
   isMutating = true;
+  document.body.classList.add('is-mutating');
+  if (mutateStatus) mutateStatus.hidden = false;
   try {
     await action();
+    taskDetailDraftTaskId = null;
     await refreshDashboard();
   } catch (error) {
     window.alert(error.message);
   } finally {
     isMutating = false;
+    document.body.classList.remove('is-mutating');
+    if (mutateStatus) mutateStatus.hidden = true;
   }
 }
 
@@ -739,12 +2779,116 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  const boardButton = event.target.closest('button[data-project-board-id]');
+  if (boardButton) {
+    openTaskBoard(boardButton.dataset.projectBoardId);
+    return;
+  }
+
+  const addRepoButton = event.target.closest('#add-project-repo-button');
+  if (addRepoButton) {
+    const repos = readProjectRepoFields();
+    renderProjectRepoFields([...repos, createEmptyProjectRepo()]);
+    return;
+  }
+
+  const removeRepoButton = event.target.closest('button[data-project-repo-remove]');
+  if (removeRepoButton) {
+    const repos = readProjectRepoFields();
+    repos.splice(Number(removeRepoButton.dataset.projectRepoRemove), 1);
+    renderProjectRepoFields(repos.length ? repos : [createEmptyProjectRepo()]);
+    return;
+  }
+
+  const addServiceButton = event.target.closest('#add-project-service-button');
+  if (addServiceButton) {
+    const services = readProjectServiceFields();
+    renderProjectServiceFields([...services, createEmptyProjectService()]);
+    return;
+  }
+
+  const removeServiceButton = event.target.closest('button[data-project-service-remove]');
+  if (removeServiceButton) {
+    const services = readProjectServiceFields();
+    services.splice(Number(removeServiceButton.dataset.projectServiceRemove), 1);
+    renderProjectServiceFields(services);
+    return;
+  }
+
+  const projectButton = event.target.closest('button[data-project-id]');
+  if (projectButton) {
+    const { projectAction, projectId } = projectButton.dataset;
+    if (projectAction === 'open-board') {
+      openTaskBoard(projectId);
+      return;
+    }
+    if (projectAction === 'edit') {
+      openProjectEdit(projectId);
+      return;
+    }
+    if (projectAction === 'delete') {
+      const project = dashboard.projects.find((item) => item.id === projectId);
+      if (!project) return;
+      if (!window.confirm(`Delete project "${project.name}"? Tasks will keep their existing project name.`)) return;
+      mutate(() => api(`/api/projects/${projectId}`, { method: 'DELETE' }));
+      return;
+    }
+  }
+
+  const keywordButton = event.target.closest('button[data-keyword-id]');
+  if (keywordButton) {
+    const { keywordAction, keywordId } = keywordButton.dataset;
+    if (keywordAction === 'edit') {
+      openKeywordEdit(keywordId);
+      return;
+    }
+    if (keywordAction === 'delete') {
+      const keyword = (dashboard.keywords || []).find((item) => item.id === keywordId);
+      if (!keyword) return;
+      if (!window.confirm(`Delete keyword "${keyword.term}"?`)) return;
+      mutate(async () => {
+        await api(`/api/keywords/${keywordId}`, { method: 'DELETE' });
+        if (selectedKeywordId === keywordId) {
+          clearKeywordForm();
+        }
+      });
+      return;
+    }
+  }
+
   const taskButton = event.target.closest('button[data-task-id]');
   if (!taskButton) return;
 
   const { action, taskId } = taskButton.dataset;
+  if (action === 'split-task') {
+    openSplitTaskDialog(taskId).catch((error) => window.alert(error.message));
+    return;
+  }
   if (action === 'move-left') {
     mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: -1 }) }));
+  }
+  if (action === 'start-review') {
+    mutate(() => api(`/api/tasks/${taskId}/review/start`, { method: 'POST' }));
+  }
+  if (action === 'stop-review') {
+    mutate(() => api(`/api/tasks/${taskId}/review/stop`, { method: 'POST' }));
+  }
+  if (action === 'open-review') {
+    const task = dashboard.tasks.find((item) => item.id === taskId);
+    const openUrl = task?.reviewEnvironment?.openUrl;
+    if (!openUrl || task?.reviewEnvironment?.status !== 'ready') {
+      window.alert(task?.reviewEnvironment?.message || 'No local review URL is ready yet for this task.');
+      return;
+    }
+    window.open(openUrl, '_blank', 'noopener,noreferrer');
+  }
+  if (action === 'create-review-fix-task') {
+    mutate(async () => {
+      const response = await api(`/api/tasks/${taskId}/create-review-fix-task`, { method: 'POST' });
+      if (response?.task?.id) {
+        selectedTaskId = response.task.id;
+      }
+    });
   }
   if (action === 'move-right') {
     mutate(() => api(`/api/tasks/${taskId}/move`, { method: 'POST', body: JSON.stringify({ direction: 1 }) }));
@@ -769,6 +2913,11 @@ document.addEventListener('click', (event) => {
 taskForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const formData = new FormData(taskForm);
+  const boardProject = getCurrentTaskBoardProject();
+  if (!boardProject) {
+    window.alert('Open a project board first, then create tasks inside that project.');
+    return;
+  }
   mutate(async () => {
     await api('/api/tasks', {
       method: 'POST',
@@ -777,7 +2926,7 @@ taskForm.addEventListener('submit', (event) => {
         notes: formData.get('notes'),
         priority: formData.get('priority'),
         agentId: formData.get('agentId'),
-        owner: formData.get('owner'),
+        owner: boardProject.name,
       }),
     });
     taskForm.reset();
@@ -785,7 +2934,182 @@ taskForm.addEventListener('submit', (event) => {
   });
 });
 
+projectForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const formData = new FormData(projectForm);
+  const repos = readProjectRepoFields();
+  if (!repos.length || !repos.some((repo) => repo.url)) {
+    window.alert('Add at least one repository URL for the project.');
+    return;
+  }
+
+  const payload = {
+    name: formData.get('name'),
+    repos,
+    reviewServices: readProjectServiceFields(),
+    gitWorkflow: formData.get('gitWorkflow'),
+    keepDocumentationUpToDate: formData.get('keepDocumentationUpToDate') === 'on',
+    notes: formData.get('notes'),
+  };
+
+  mutate(async () => {
+    const hasEditableProject = Boolean(selectedProjectId) && dashboard.projects.some((project) => project.id === selectedProjectId);
+
+    if (hasEditableProject) {
+      try {
+        await api(`/api/projects/${selectedProjectId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+      } catch (error) {
+        if (String(error.message || '').includes('not_found')) {
+          selectedProjectId = null;
+          await api('/api/projects', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+        } else {
+          throw error;
+        }
+      }
+    } else {
+      selectedProjectId = null;
+      await api('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    }
+    clearProjectForm();
+  });
+});
+
+projectCancelButton.addEventListener('click', () => {
+  clearProjectForm();
+});
+
+keywordForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const formData = new FormData(keywordForm);
+  const payload = buildKeywordPayload(formData);
+
+  mutate(async () => {
+    if (selectedKeywordId) {
+      await api(`/api/keywords/${selectedKeywordId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api('/api/keywords', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    }
+    clearKeywordForm();
+  });
+});
+
+keywordCancelButton.addEventListener('click', () => {
+  clearKeywordForm();
+});
+
+keywordSeedButton.addEventListener('click', () => {
+  const projectId = getValidKeywordProjectId(keywordProjectSelect.value);
+  if (!projectId) {
+    window.alert('Create a project first, then seed sample keywords.');
+    return;
+  }
+
+  keywordProjectSelect.value = projectId;
+  mutate(async () => {
+    for (const payload of buildKeywordSampleSet(projectId)) {
+      await api('/api/keywords', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    }
+    clearKeywordForm();
+    keywordProjectFilter.value = projectId;
+  });
+});
+
+keywordProjectFilter.addEventListener('change', renderKeywords);
+keywordStatusFilter.addEventListener('change', renderKeywords);
+keywordSearchFilter.addEventListener('input', renderKeywords);
+keywordConnectButton.addEventListener('click', () => {
+  mutate(async () => {
+    const response = await api('/api/integrations/google-search-console/connect', { method: 'POST' });
+    if (!response?.authorizeUrl) {
+      throw new Error('Google OAuth did not return an authorization URL.');
+    }
+    window.open(response.authorizeUrl, '_blank', 'noopener,noreferrer');
+  });
+});
+
+keywordDisconnectButton.addEventListener('click', () => {
+  const connection = getGoogleSearchConsoleConnection();
+  if (!connection || !['connected', 'expired', 'scope-mismatch'].includes(connection.status)) {
+    return;
+  }
+  if (!window.confirm('Disconnect the stored Google Search Console credentials from this dashboard?')) {
+    return;
+  }
+  mutate(() => api('/api/integrations/google-search-console', { method: 'DELETE' }));
+});
+
+taskEditForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!selectedTaskId) return;
+
+  const formData = new FormData(taskEditForm);
+  const boardProject = getCurrentTaskBoardProject();
+  mutate(async () => {
+    await api(`/api/tasks/${selectedTaskId}/update`, {
+      method: 'POST',
+      body: JSON.stringify({
+        title: formData.get('title'),
+        notes: formData.get('notes'),
+        priority: formData.get('priority'),
+        agentId: formData.get('agentId'),
+        owner: boardProject?.name || formData.get('owner'),
+        blockedBy: getSelectedValues(taskEditBlockedBy),
+      }),
+    });
+    isTaskEditMode = false;
+  });
+});
+
+taskEditOwner?.addEventListener('change', () => {
+  const task = getTaskById(selectedTaskId);
+  if (!task) {
+    return;
+  }
+  populateBlockedByOptions(taskEditBlockedBy, { ...task, owner: taskEditOwner.value || task.owner }, []);
+});
+
+taskCommentForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!selectedTaskId) return;
+
+  const formData = new FormData(taskCommentForm);
+  mutate(async () => {
+    await api(`/api/tasks/${selectedTaskId}/comment`, {
+      method: 'POST',
+      body: JSON.stringify({
+        author: formData.get('author'),
+        comment: formData.get('comment'),
+      }),
+    });
+    taskCommentBody.value = '';
+  });
+});
+
 seedReadyButton.addEventListener('click', () => {
+  const boardProject = getCurrentTaskBoardProject();
+  if (!boardProject) {
+    window.alert('Open a project board first, then create tasks inside that project.');
+    return;
+  }
+
   mutate(async () => {
     const created = await api('/api/tasks', {
       method: 'POST',
@@ -794,7 +3118,7 @@ seedReadyButton.addEventListener('click', () => {
         notes: 'Create a compact summary card for live tasks, token burn, and idle capacity.',
         priority: 'high',
         agentId: 'atlas',
-        owner: 'Internal Tools',
+        owner: boardProject.name,
       }),
     });
     await api(`/api/tasks/${created.task.id}/move`, { method: 'POST', body: JSON.stringify({ direction: 1 }) });
@@ -802,13 +3126,51 @@ seedReadyButton.addEventListener('click', () => {
   });
 });
 
-resetButton.addEventListener('click', () => {
-  if (!window.confirm('Reset the board to the current seed state?')) return;
-  mutate(() => api('/api/reset', { method: 'POST' }));
-});
-
 refreshButton.addEventListener('click', () => {
   refreshDashboard().catch((error) => window.alert(error.message));
+});
+
+restartServerButton?.addEventListener('click', async () => {
+  const shouldRestart = window.confirm('Restart the dashboard server now? This is useful if the UI has gone stale, but it will interrupt any active task runs.');
+  if (!shouldRestart) {
+    return;
+  }
+
+  restartServerButton.disabled = true;
+  if (mutateStatus) {
+    mutateStatus.textContent = 'Restarting server…';
+    mutateStatus.hidden = false;
+  }
+
+  try {
+    await api('/api/server/restart', { method: 'POST' });
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 1800);
+  } catch (error) {
+    restartServerButton.disabled = false;
+    if (mutateStatus) {
+      mutateStatus.textContent = 'Working…';
+      mutateStatus.hidden = true;
+    }
+    window.alert(error.message);
+  }
+});
+
+taskDetailCloseButton.addEventListener('click', closeTaskDetail);
+taskDetailBackdrop.addEventListener('click', closeTaskDetail);
+taskDetailEditToggle.addEventListener('click', () => {
+  if (taskDetailEditToggle.disabled) return;
+  isTaskEditMode = !isTaskEditMode;
+  renderTaskDetail();
+});
+
+themeToggleButton?.addEventListener('change', toggleTheme);
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && selectedTaskId) {
+    closeTaskDetail();
+  }
 });
 
 reassignCancelButton.addEventListener('click', () => {
@@ -829,14 +3191,52 @@ reassignConfirmButton.addEventListener('click', () => {
   mutate(() => api(`/api/tasks/${taskId}/reassign`, { method: 'POST', body: JSON.stringify({ agentId }) }));
 });
 
+splitTaskCancelButton.addEventListener('click', closeSplitTaskDialog);
+splitTaskDialog.addEventListener('close', () => {
+  pendingSplitTaskId = null;
+  splitTaskPlanList.innerHTML = '';
+});
+splitTaskConfirmButton.addEventListener('click', () => {
+  if (!pendingSplitTaskId) {
+    closeSplitTaskDialog();
+    return;
+  }
+
+  const taskId = pendingSplitTaskId;
+  const plan = readSplitTaskPlan();
+  mutate(async () => {
+    await api(`/api/tasks/${taskId}/split`, {
+      method: 'POST',
+      body: JSON.stringify({ plan }),
+    });
+    closeSplitTaskDialog();
+  });
+});
+
 newTaskButton.addEventListener('click', () => {
-  window.location.hash = 'tasks';
+  if (selectedTaskBoardProjectId) {
+    window.location.hash = `tasks/${selectedTaskBoardProjectId}`;
+  } else {
+    window.location.hash = 'tasks';
+  }
   applyView();
-  document.getElementById('task-title').focus();
+  if (getCurrentTaskBoardProject()) {
+    document.getElementById('task-title').focus();
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
-window.addEventListener('hashchange', applyView);
+window.addEventListener('hashchange', () => {
+  if (dashboard) {
+    renderAll();
+  } else {
+    applyView();
+  }
+});
+
+initTheme();
+clearProjectForm();
+clearKeywordForm({ preserveProjectSelection: false });
 
 async function bootstrap() {
   applyView();
